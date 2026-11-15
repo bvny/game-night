@@ -53,17 +53,36 @@
       <path d="M50,77 l-30,-4 M50,81 l-29,4 M90,77 l30,-4 M90,81 l29,4" stroke="#F2EEE8" stroke-width="1.3" stroke-linecap="round"/>
     </g>`;
 
+  /* ---------- Lukas's black cat (a void with opinions) ---------- */
+  const V = { fur: '#17141A', hi: '#2C2630', eye: '#F2C230', nose: '#3A2F3C', ear: '#5B3E52' };
+  const voidFace = (dx = 0, dy = 0) => `
+    <g transform="translate(${dx},${dy})">
+      <polygon points="28,44 20,4 60,26" fill="${V.fur}" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/>
+      <polygon points="112,44 120,4 80,26" fill="${V.fur}" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/>
+      <polygon points="33,36 28,15 50,28" fill="${V.ear}"/><polygon points="107,36 112,15 90,28" fill="${V.ear}"/>
+      <ellipse cx="70" cy="62" rx="46" ry="38" fill="${V.fur}" stroke="${INK}" stroke-width="2.2"/>
+      <path d="M44,40 q26,-12 52,0" stroke="${V.hi}" stroke-width="5" fill="none" stroke-linecap="round"/>
+      <ellipse cx="50" cy="60" rx="12" ry="11" fill="${V.eye}"/><ellipse cx="90" cy="60" rx="12" ry="11" fill="${V.eye}"/>
+      <ellipse cx="50" cy="61" rx="3" ry="8" fill="${INK}"/><ellipse cx="90" cy="61" rx="3" ry="8" fill="${INK}"/>
+      <circle cx="46" cy="55" r="2.6" fill="#fff"/><circle cx="86" cy="55" r="2.6" fill="#fff"/>
+      <path d="M38,47 l18,5 M102,47 l-18,5" stroke="${INK}" stroke-width="3" stroke-linecap="round"/>
+      <path d="M66,75 h8 l-4,4 Z" fill="${V.nose}"/>
+      <path d="M70,79 v2 M70,81 q-4,3 -7,1 M70,81 q4,3 7,1" stroke="#6E6372" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+      <path d="M64,83 l2,4 l2,-4" fill="#fff"/>
+      <path d="M48,76 l-30,-4 M48,80 l-29,4 M92,76 l30,-4 M92,80 l29,4" stroke="#8B8090" stroke-width="1.3" stroke-linecap="round"/>
+    </g>`;
+
   const peekSVG = id => `<svg viewBox="0 0 140 118" xmlns="http://www.w3.org/2000/svg">
-      ${id === 'grumpy' ? grumpyFace() : tuxFace()}
-      <ellipse cx="46" cy="106" rx="14" ry="9" fill="${id === 'grumpy' ? G.fur : T.white}" stroke="${INK}" stroke-width="2.2"/>
-      <ellipse cx="94" cy="106" rx="14" ry="9" fill="${id === 'grumpy' ? G.fur : T.white}" stroke="${INK}" stroke-width="2.2"/>
+      ${id === 'grumpy' ? grumpyFace() : id === 'void' ? voidFace() : tuxFace()}
+      <ellipse cx="46" cy="106" rx="14" ry="9" fill="${id === 'grumpy' ? G.fur : id === 'void' ? V.fur : T.white}" stroke="${INK}" stroke-width="2.2"/>
+      <ellipse cx="94" cy="106" rx="14" ry="9" fill="${id === 'grumpy' ? G.fur : id === 'void' ? V.fur : T.white}" stroke="${INK}" stroke-width="2.2"/>
       <path d="M40,104 v5 M46,103 v6 M52,104 v5 M88,104 v5 M94,103 v6 M100,104 v5" stroke="${INK}" stroke-width="1.3" stroke-linecap="round"/>
     </svg>`;
 
   // Side view, facing right. Legs/tail are animated with CSS.
   const walkSVG = id => {
-    const g = id === 'grumpy';
-    const body = g ? G.fur : T.fur, leg = g ? G.fur : T.fur, paw = g ? G.fur : T.white, tail = g ? G.tab : T.fur;
+    const g = id === 'grumpy', v = id === 'void';
+    const body = g ? G.fur : v ? V.fur : T.fur, leg = body, paw = g ? G.fur : v ? V.fur : T.white, tail = g ? G.tab : v ? V.fur : T.fur;
     const legs = [[50, 'b'], [62, 'a'], [104, 'a'], [116, 'b']].map(([x, c]) =>
       `<g class="leg leg-${c}"><rect x="${x}" y="60" width="10" height="32" rx="5" fill="${leg}" stroke="${INK}" stroke-width="2"/><ellipse cx="${x + 5}" cy="91" rx="7" ry="4" fill="${paw}" stroke="${INK}" stroke-width="1.8"/></g>`).join('');
     return `<svg viewBox="0 0 172 104" xmlns="http://www.w3.org/2000/svg">
@@ -73,18 +92,20 @@
       ${legs}
       <ellipse cx="83" cy="56" rx="47" ry="21" fill="${body}" stroke="${INK}" stroke-width="2.4"/>
       ${g ? `<ellipse cx="72" cy="44" rx="24" ry="10" fill="${G.tab}"/><path d="M60,38 q3,5 1,10 M72,36 q3,5 1,11 M84,38 q3,5 1,10" stroke="${G.stripe}" stroke-width="2.2" fill="none"/>`
+          : v ? `<path d="M60,40 q22,-8 44,0" stroke="${V.hi}" stroke-width="5" fill="none" stroke-linecap="round"/>`
           : `<ellipse cx="112" cy="62" rx="14" ry="13" fill="${T.white}"/><path d="M56,72 q26,8 48,0" stroke="${T.white}" stroke-width="6" fill="none" stroke-linecap="round"/>
              <path d="M38,50 l-6,-4 l7,-1 M40,62 l-7,2 l6,3" stroke="${T.fur}" stroke-width="3" fill="none"/>`}
       <g class="head">
-        <polygon points="116,30 116,10 130,22" fill="${g ? G.tab : T.fur}" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/>
-        <polygon points="134,22 146,8 148,30" fill="${g ? G.tab : T.fur}" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/>
-        <circle cx="132" cy="40" r="19" fill="${g ? G.fur : T.fur}" stroke="${INK}" stroke-width="2.4"/>
+        <polygon points="116,30 116,10 130,22" fill="${g ? G.tab : v ? V.fur : T.fur}" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/>
+        <polygon points="134,22 146,8 148,30" fill="${g ? G.tab : v ? V.fur : T.fur}" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/>
+        <circle cx="132" cy="40" r="19" fill="${g ? G.fur : v ? V.fur : T.fur}" stroke="${INK}" stroke-width="2.4"/>
         ${g ? `<path d="M114,36 C116,24 128,20 140,22 C147,25 151,31 151,37 C144,32 136,32 130,36 C126,32 120,32 114,36 Z" fill="${G.tab}"/>
                <ellipse cx="140" cy="40" rx="5" ry="3.6" fill="${G.eye}"/><path d="M134,38 h12 v2 q-6,-1.5 -12,0 Z" fill="${G.fur}"/><path d="M134,40 q6,-1.5 12,0" stroke="${INK}" stroke-width="2" fill="none"/>`
+            : v ? `<circle cx="141" cy="38" r="6" fill="${V.eye}"/><ellipse cx="142" cy="38.5" rx="1.6" ry="4.2" fill="${INK}"/><circle cx="139.5" cy="36" r="1.3" fill="#fff"/>`
             : `<path d="M140,30 C138,38 136,44 134,52 C140,58 150,56 151,46 C148,40 144,34 140,30 Z" fill="${T.white}"/>
                <circle cx="141" cy="38" r="5.5" fill="${T.eye}" stroke="${INK}" stroke-width="1.2"/><ellipse cx="142" cy="38.5" rx="2" ry="3.5" fill="${INK}"/><circle cx="140" cy="36" r="1.3" fill="#fff"/>`}
-        <path d="M148,46 l4,0 l-2,3 Z" fill="${g ? G.nose : T.nose}"/>
-        <path d="M146,49 l20,-2 M146,51 l19,3" stroke="${g ? '#BDB3A8' : '#F2EEE8'}" stroke-width="1.2" stroke-linecap="round"/>
+        <path d="M148,46 l4,0 l-2,3 Z" fill="${g ? G.nose : v ? V.nose : T.nose}"/>
+        <path d="M146,49 l20,-2 M146,51 l19,3" stroke="${g ? '#BDB3A8' : v ? '#8B8090' : '#F2EEE8'}" stroke-width="1.2" stroke-linecap="round"/>
       </g>
     </svg>`;
   };
@@ -139,6 +160,10 @@
       lines: ['…what.', 'no.', "I've been judging you for 20 minutes", 'pick a game already', 'this cable is fashion', '*slow disappointed blink*', 'mrrp (derogatory)', 'you call that a pitch?'] },
     { id: 'tux', name: names[1] || '', special: 'flop',
       lines: ['mrrp!', 'belly rub? (it’s a trap)', 'FEED ME', 'I vote Stardew', 'pspspsps yourself', '*knocks controller off desk*', 'play with ME instead', 'is it dinner yet'] },
+    { id: 'void', name: names[2] || '', special: 'peek',
+      lines: ['lukas shut up about csgo', 'still downloading? lol', 'your internet is slower than me getting off the bed', '40 GB? see you next week',
+        '*sits on keyboard* gg', 'skill issue', 'I am not a cat. I am a void with opinions', 'you queued for THAT?', 'imagine not owning the game',
+        '*stares into your soul*', 'ping: 999', 'I could carry you in csgo and I have no thumbs'] },
   ];
   const pick = a => a[Math.floor(Math.random() * a.length)];
 
@@ -174,7 +199,7 @@
 
     const special = mode === 'special';
     el.className = `cat ${special ? cat.special : 'peek'}`;
-    el.innerHTML = special ? (cat.special === 'sit' ? sitSVG() : flopSVG()) : peekSVG(cat.id);
+    el.innerHTML = special && cat.special !== 'peek' ? (cat.special === 'sit' ? sitSVG() : flopSVG()) : peekSVG(cat.id);
     el.style[leftSide ? 'left' : 'right'] = `${4 + Math.random() * 14}vw`;
     root.appendChild(el);
     requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('in')));

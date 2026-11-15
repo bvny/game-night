@@ -56,6 +56,7 @@ worker/SETUP.md     step-by-step backend setup
 - [x] Profiles: change/unlink Steam, hide games from the site, stats deep dive (hours, tags, daily history, achievements, in-game stats, library value)
 - [x] Steam review smileys (:D :) :| :( >:( ), 🔧 Modded tag (Steam Workshop / Moddable), Single-player only filter, "Pitched ✓" buttons, #1 leaderboard taglines
 - [x] Keyshop prices (GG.deals) next to Steam prices; live "who's online / in-game" from Steam; roll from the shortlist; mobile hamburger menu; cat cameos 🐈
+- [x] Install sizes everywhere (+ Under 20 GB filter), last played per person, last updated / abandoned warning, News tab (updates for crew-owned games), account value + unplayed-spend leaderboards
 - [x] Shared pitches + votes, full Steam store search, posts to #game-night via webhook (pitches @mention the people they're for)
 
 ## Next steps

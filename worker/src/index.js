@@ -49,6 +49,8 @@ export default {
       if (!last || Date.now() - +last.value > 55 * 60e3) {
         await env.DB.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES ('hourly_at', ?)").bind(String(Date.now())).run();
         await hourly(env);
+      } else {
+        try { await fillSizes(env, 15); } catch (e) { console.error('sizes', e); }
       }
       try { await fillKeyshop(env); } catch (e) { console.error('keyshop', e); }
     })());
@@ -69,7 +71,13 @@ async function ensureSchema(env) {
     env.DB.prepare('CREATE TABLE IF NOT EXISTS hidden_games (user_id TEXT NOT NULL, appid INTEGER NOT NULL, PRIMARY KEY (user_id, appid))'),
     env.DB.prepare('CREATE TABLE IF NOT EXISTS keyshop (appid INTEGER NOT NULL, cc TEXT NOT NULL, price REAL, url TEXT, fetched_at INTEGER, PRIMARY KEY (appid, cc))'),
     env.DB.prepare('CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS news (gid TEXT PRIMARY KEY, appid INTEGER NOT NULL, title TEXT, url TEXT, date INTEGER, patch INTEGER DEFAULT 0, snippet TEXT, feed TEXT)'),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS news_appid_date ON news(appid, date)'),
   ]);
+  for (const sql of ['ALTER TABLE library ADD COLUMN last_played INTEGER', 'ALTER TABLE games ADD COLUMN size_mb INTEGER', 'ALTER TABLE games ADD COLUMN size_at INTEGER',
+    'ALTER TABLE games ADD COLUMN last_update INTEGER', 'ALTER TABLE games ADD COLUMN last_news INTEGER', 'ALTER TABLE games ADD COLUMN news_at INTEGER']) {
+    try { await env.DB.prepare(sql).run(); } catch (e) { if (!/duplicate column/i.test(String(e && e.message || e))) throw e; }
+  }
   let added = false;
   for (const col of ['description TEXT', 'header TEXT', 'review_score INTEGER', 'review_pct INTEGER', 'review_count INTEGER', 'modded INTEGER DEFAULT 0', 'workshop INTEGER DEFAULT 0']) {
     try { await env.DB.prepare(`ALTER TABLE games ADD COLUMN ${col}`).run(); added = true; }
@@ -86,7 +94,7 @@ async function route(req, env, ctx) {
   const url = new URL(req.url);
   const p = url.pathname.replace(/\/+$/, '') || '/';
 
-  if (p === '/') return json({ ok: true, name: 'burrito-game-night-api', version: 2 });
+  if (p === '/') return health(env);
   if (p === '/auth/login') return authLogin(env, url);
   if (p === '/auth/callback') return authCallback(req, env, ctx, url);
 
@@ -98,8 +106,9 @@ async function route(req, env, ctx) {
 
     if (p === '/api/me' && M === 'GET') return json({ user: publicMe(user) });
     if (p === '/api/crew' && M === 'GET') return crew(env, ctx);
-    if (p === '/api/discovery' && M === 'GET') return discovery(env);
+    if (p === '/api/discovery' && M === 'GET') { ctx.waitUntil(fillKeyshop(env, { onDemand: true }).catch(() => {})); return discovery(env); }
     if (p === '/api/presence' && M === 'GET') return presence(env, ctx);
+    if (p === '/api/news' && M === 'GET') return newsFeed(env, ctx, url, user);
     if (p === '/api/search' && M === 'GET') return search(env, ctx, url);
     if (p === '/api/steam/link' && M === 'POST') return steamLink(req, env, ctx, user);
     if (p === '/api/steam/link' && M === 'DELETE') {
@@ -270,7 +279,7 @@ async function syncSteam(env, user) {
   }
 
   const stmts = [env.DB.prepare('DELETE FROM library WHERE user_id=?').bind(user.id)];
-  const ins = env.DB.prepare('INSERT INTO library (user_id, appid, minutes, minutes_2w) VALUES (?, ?, ?, ?)');
+  const ins = env.DB.prepare('INSERT INTO library (user_id, appid, minutes, minutes_2w, last_played) VALUES (?, ?, ?, ?, ?)');
   const gIns = env.DB.prepare(
     `INSERT INTO games (appid, name) VALUES (?, ?)
      ON CONFLICT(appid) DO UPDATE SET name=excluded.name WHERE games.name IS NULL`
@@ -279,7 +288,7 @@ async function syncSteam(env, user) {
   for (const g of games) {
     const m = g.playtime_forever || 0, m2 = g.playtime_2weeks || 0;
     total += m; total2w += m2;
-    stmts.push(ins.bind(user.id, g.appid, m, m2));
+    stmts.push(ins.bind(user.id, g.appid, m, m2, g.rtime_last_played ? g.rtime_last_played * 1000 : null));
     stmts.push(gIns.bind(g.appid, g.name || null));
   }
   const day = new Date(now).toISOString().slice(0, 10);
@@ -475,6 +484,7 @@ function shapeGame(g, withDesc, keys) {
     max_players: g.max_players, tags: g.genres ? JSON.parse(g.genres) : [],
     prices: g.prices ? JSON.parse(g.prices) : null, meta_at: g.meta_at,
     img: g.header || null, modded: !!g.modded, workshop: !!g.workshop,
+    size_mb: g.size_mb || null, last_update: g.last_update || null, last_news: g.last_news || null,
     review: g.review_score ? { score: g.review_score, pct: g.review_pct, count: g.review_count } : null,
     ...(withDesc ? { description: g.description || '' } : {}),
   };
@@ -484,7 +494,7 @@ let lastLazyFill = 0;
 async function crew(env, ctx) {
   const [users, lib, games, missing] = await Promise.all([
     env.DB.prepare('SELECT id, name, avatar, steam_id, steam_private, game_count, last_sync FROM users ORDER BY name COLLATE NOCASE').all(),
-    env.DB.prepare('SELECT l.user_id, l.appid, l.minutes, l.minutes_2w FROM library l WHERE NOT EXISTS (SELECT 1 FROM hidden_games h WHERE h.user_id = l.user_id AND h.appid = l.appid)').all(),
+    env.DB.prepare('SELECT l.user_id, l.appid, l.minutes, l.minutes_2w, l.last_played FROM library l WHERE NOT EXISTS (SELECT 1 FROM hidden_games h WHERE h.user_id = l.user_id AND h.appid = l.appid)').all(),
     env.DB.prepare('SELECT * FROM games WHERE appid IN (SELECT DISTINCT appid FROM library)').all(),
     env.DB.prepare('SELECT COUNT(*) AS n FROM games g WHERE g.meta_at IS NULL AND g.appid IN (SELECT appid FROM library)').first(),
   ]);
@@ -494,8 +504,9 @@ async function crew(env, ctx) {
     ctx.waitUntil(fillLibraryMeta(env).catch(e => console.error('lazy meta', e)));
   }
   const library = {};
-  for (const r of lib.results) (library[r.user_id] = library[r.user_id] || {})[r.appid] = [r.minutes, r.minutes_2w];
+  for (const r of lib.results) (library[r.user_id] = library[r.user_id] || {})[r.appid] = [r.minutes, r.minutes_2w, r.last_played || null];
   const keys = await keysFor(env, 'SELECT DISTINCT appid FROM library');
+  ctx.waitUntil(fillKeyshop(env, { onDemand: true }).catch(e => console.error('keyshop on demand', e)));
   return json({
     users: users.results.map(u => ({
       id: u.id, name: u.name, avatar: u.avatar, steam_id: !!u.steam_id,
@@ -746,8 +757,9 @@ async function gameDetails(env, ctx, appid, cc) {
   const entry = (await r.json())[appid];
   if (!entry || !entry.success) return json({ error: 'not_found' }, 404);
 
-  const known = await env.DB.prepare('SELECT meta_at FROM games WHERE appid=?').bind(appid).first();
+  const known = await env.DB.prepare('SELECT meta_at, size_at FROM games WHERE appid=?').bind(appid).first();
   if (!known || !known.meta_at) ctx.waitUntil(refreshMeta(env, [appid]).catch(e => console.error('meta on details', e)));
+  if (known && !known.size_at) ctx.waitUntil(env.DB.prepare('UPDATE games SET size_mb=?, size_at=? WHERE appid=?').bind(parseSize(entry.data.pc_requirements), Date.now(), appid).run());
   const res = json(shapeDetails(appid, entry.data), 200, { 'Cache-Control': 'public, max-age=43200' });
   ctx.waitUntil(cache.put(key, res.clone()));
   return res;
@@ -768,6 +780,7 @@ function shapeDetails(appid, a) {
     release: a.release_date ? a.release_date.date : null,
     developers: a.developers || [],
     movie: pickMovie(a.movies),
+    size_mb: parseSize(a.pc_requirements),
     screenshots: (a.screenshots || []).slice(0, 6).map(s => s.path_thumbnail),
   };
 }
@@ -811,11 +824,39 @@ async function presence(env, ctx) {
   return res;
 }
 
+/* ------------------------------------------------------------------ health / diagnostics (no secrets) */
+
+async function health(env) {
+  const kv = async k => { const r = await env.DB.prepare('SELECT value FROM kv WHERE key=?').bind(k).first(); return r ? r.value : null; };
+  const counts = await env.DB.prepare('SELECT COUNT(*) AS checked, SUM(price IS NOT NULL) AS priced FROM keyshop').first();
+  const ago = v => v ? `${Math.round((Date.now() - +v) / 60000)} min ago` : 'never';
+  return json({
+    ok: true, name: 'burrito-game-night-api', version: 6,
+    keyshop: {
+      api_key_set: !!env.GGDEALS_API_KEY,
+      games_checked: counts.checked || 0,
+      games_with_price: counts.priced || 0,
+      last_run: ago(await kv('keyshop_at')),
+      last_result: (await kv('keyshop_status')) || 'not run yet',
+    },
+    scheduled_jobs: { last_hourly_run: ago(await kv('hourly_at')) },
+    install_sizes: await env.DB.prepare('SELECT SUM(size_at IS NOT NULL) AS checked, SUM(size_mb IS NOT NULL) AS known FROM games WHERE appid IN (SELECT appid FROM library)').first(),
+    news_items: (await env.DB.prepare('SELECT COUNT(*) AS n FROM news').first()).n,
+    webhook_set: !!env.DISCORD_WEBHOOK_URL,
+  });
+}
+
 /* ------------------------------------------------------------------ keyshop prices (GG.deals) */
 
 // One request per run (max 100 games): GG.deals allows 100 records/minute and 1,000/hour.
-async function fillKeyshop(env) {
+async function fillKeyshop(env, { onDemand = false } = {}) {
   if (!env.GGDEALS_API_KEY) return 0;
+  const setKv = (k, v) => env.DB.prepare('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)').bind(k, String(v)).run();
+  if (onDemand) {
+    // GG.deals allows 100 records/minute: never start more than one batch a minute across all visitors
+    const last = await env.DB.prepare("SELECT value FROM kv WHERE key='keyshop_at'").first();
+    if (last && Date.now() - +last.value < 65_000) return 0;
+  }
   const stale = Date.now() - 24 * 3600e3;
   for (const cc of CC_LIST) {
     const ids = (await env.DB.prepare(
@@ -826,9 +867,20 @@ async function fillKeyshop(env) {
        LIMIT 100`
     ).bind(cc, stale).all()).results.map(r => r.appid);
     if (!ids.length) continue;
-    const r = await fetch(`https://api.gg.deals/v1/prices/by-steam-app-id/?ids=${ids.join(',')}&key=${env.GGDEALS_API_KEY}&region=${cc}`);
-    if (!r.ok) { console.error('gg.deals', r.status, (await r.text()).slice(0, 200)); return 0; }
-    const d = await r.json();
+    await setKv('keyshop_at', Date.now());
+    let r;
+    try {
+      r = await fetch(`https://api.gg.deals/v1/prices/by-steam-app-id/?ids=${ids.join(',')}&key=${encodeURIComponent(env.GGDEALS_API_KEY.trim())}&region=${cc}`,
+        { headers: { Accept: 'application/json', 'User-Agent': 'BurritoGangGameNight/1.0 (+https://gaymers.burritogang.com)' } });
+    } catch (e) { await setKv('keyshop_status', `network error: ${String(e).slice(0, 150)}`); return 0; }
+    const text = await r.text();
+    let d = null; try { d = JSON.parse(text); } catch {}
+    if (!r.ok || !d || d.success === false) {
+      const msg = (d && d.data && (d.data.message || d.data.name)) || text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 150);
+      await setKv('keyshop_status', `GG.deals HTTP ${r.status} (${cc}): ${msg}`);
+      console.error('gg.deals', r.status, msg);
+      return 0;
+    }
     const now = Date.now();
     const stmts = ids.map(id => {
       const e = d.data && d.data[id];
@@ -837,10 +889,113 @@ async function fillKeyshop(env) {
         .bind(id, cc, Number.isFinite(price) ? price : null, (e && e.url) || null, now);
     });
     await env.DB.batch(stmts);
+    const priced = ids.filter(id => { const e = d.data && d.data[id]; return e && e.prices && e.prices.currentKeyshops != null; }).length;
+    await setKv('keyshop_status', `ok: ${ids.length} games checked for ${cc.toUpperCase()}, ${priced} with keyshop prices`);
     return ids.length;
   }
+  await setKv('keyshop_status', 'ok: all prices up to date');
   return 0;
 }
+
+/* ------------------------------------------------------------------ install sizes */
+
+// "Storage: 150 GB available space" from the PC requirements (biggest of minimum/recommended), in MB
+function parseSize(pr) {
+  if (!pr || Array.isArray(pr)) return null;
+  const text = `${pr.minimum || ''} ${pr.recommended || ''}`;
+  const re = /(?:Storage|Hard Drive|Hard Disk(?: Space)?|Disk Space|HDD|Space)\s*:\s*(?:<\/strong>)?\s*(?:at least\s*)?([\d.,]+)\s*(TB|GB|MB)/gi;
+  let m, best = null;
+  while ((m = re.exec(text))) {
+    const n = parseFloat(m[1].replace(',', '.'));
+    if (!Number.isFinite(n)) continue;
+    const mb = Math.round(n * ({ TB: 1024 * 1024, GB: 1024, MB: 1 }[m[2].toUpperCase()]));
+    if (mb > 0 && (!best || mb > best)) best = mb;
+  }
+  return best;
+}
+
+// Steam only gives sizes one game at a time, so a few per run (owned multiplayer games first)
+async function fillSizes(env, limit = 15) {
+  const ids = (await env.DB.prepare(
+    `SELECT g.appid FROM games g WHERE g.size_at IS NULL AND g.name IS NOT NULL AND g.meta_at IS NOT NULL
+       AND (g.appid IN (SELECT appid FROM library) OR g.appid IN (SELECT appid FROM charts) OR g.appid IN (SELECT appid FROM pitches))
+     ORDER BY (SELECT COUNT(*) FROM library l WHERE l.appid = g.appid) DESC, g.multi DESC LIMIT ?`
+  ).bind(limit).all()).results.map(r => r.appid);
+  let done = 0;
+  for (const appid of ids) {
+    const r = await fetch(`${STORE}/api/appdetails?appids=${appid}&filters=basic`);
+    if (r.status === 429 || r.status === 403) break; // Steam store rate limit: try again next run
+    const e = r.ok ? (await r.json().catch(() => ({})))[appid] : null;
+    const size = e && e.success && e.data ? parseSize(e.data.pc_requirements) : null;
+    await env.DB.prepare('UPDATE games SET size_mb=?, size_at=? WHERE appid=?').bind(size, Date.now(), appid).run();
+    done++;
+  }
+  return done;
+}
+
+/* ------------------------------------------------------------------ news + last updated */
+
+const UPDATE_RE = /(update|patch|hotfix|version|\bv\d|season|chapter|release notes|changelog|fix)/i;
+function cleanNews(s) {
+  return String(s || '').replace(/\[\/?[a-z0-9*]+(?:=[^\]]*)?\]/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\{STEAM_CLAN_IMAGE\}\S*/g, ' ')
+    .replace(/https?:\/\/\S+/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 240);
+}
+
+async function fetchNews(env, appid) {
+  const r = await fetch(`${STEAM_API}/ISteamNews/GetNewsForApp/v2/?appid=${appid}&count=8&maxlength=400&feeds=steam_community_announcements`);
+  const now = Date.now();
+  if (!r.ok) { await env.DB.prepare('UPDATE games SET news_at=? WHERE appid=?').bind(now, appid).run(); return 0; }
+  const items = ((await r.json()).appnews || {}).newsitems || [];
+  const stmts = [];
+  let lastUpdate = null, lastNews = null;
+  for (const it of items) {
+    const date = (it.date || 0) * 1000;
+    const patch = (it.tags || []).includes('patchnotes') || UPDATE_RE.test(it.title || '');
+    if (!lastNews || date > lastNews) lastNews = date;
+    if (patch && (!lastUpdate || date > lastUpdate)) lastUpdate = date;
+    stmts.push(env.DB.prepare('INSERT OR REPLACE INTO news (gid, appid, title, url, date, patch, snippet, feed) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(String(it.gid), appid, it.title || '', `https://store.steampowered.com/news/app/${appid}/view/${it.gid}`, date, patch ? 1 : 0, cleanNews(it.contents), it.feedlabel || ''));
+  }
+  stmts.push(env.DB.prepare('UPDATE games SET last_update=?, last_news=?, news_at=? WHERE appid=?').bind(lastUpdate, lastNews, now, appid));
+  await env.DB.batch(stmts);
+  return items.length;
+}
+
+// Track news for the games the crew actually plays (top 80 by recent hours / owners)
+async function fillNews(env, limit = 12) {
+  const ids = (await env.DB.prepare(
+    `SELECT t.appid FROM (SELECT l.appid, SUM(l.minutes_2w) AS m2, COUNT(*) AS owners, SUM(l.minutes) AS m FROM library l GROUP BY l.appid
+       ORDER BY m2 DESC, owners DESC, m DESC LIMIT 80) t JOIN games g ON g.appid = t.appid
+     WHERE g.news_at IS NULL OR g.news_at < ? ORDER BY g.news_at IS NOT NULL, t.m2 DESC LIMIT ?`
+  ).bind(Date.now() - 6 * 3600e3, limit).all()).results.map(r => r.appid);
+  for (const appid of ids) { try { await fetchNews(env, appid); } catch (e) { console.error('news', appid, e); } }
+  return ids.length;
+}
+
+async function newsFeed(env, ctx, url, user) {
+  const appid = parseInt(url.searchParams.get('appid') || '', 10);
+  if (appid) {
+    const g = await env.DB.prepare('SELECT news_at, last_update, last_news FROM games WHERE appid=?').bind(appid).first();
+    if (!g || !g.news_at || Date.now() - g.news_at > 6 * 3600e3) {
+      await env.DB.prepare('INSERT INTO games (appid) VALUES (?) ON CONFLICT(appid) DO NOTHING').bind(appid).run();
+      await fetchNews(env, appid);
+    }
+    const items = (await env.DB.prepare('SELECT * FROM news WHERE appid=? ORDER BY date DESC LIMIT 5').bind(appid).all()).results;
+    const gg = await env.DB.prepare('SELECT last_update, last_news FROM games WHERE appid=?').bind(appid).first();
+    return json({ items: items.map(shapeNews), last_update: gg && gg.last_update, last_news: gg && gg.last_news });
+  }
+  // Feed: news for games owned by anyone in the crew (hidden games excluded)
+  const mine = url.searchParams.get('mine') === '1';
+  const rows = (await env.DB.prepare(
+    `SELECT n.*, g.name, g.header FROM news n JOIN games g ON g.appid = n.appid
+     WHERE n.appid IN (SELECT l.appid FROM library l WHERE NOT EXISTS (SELECT 1 FROM hidden_games h WHERE h.user_id = l.user_id AND h.appid = l.appid)
+                       ${mine ? 'AND l.user_id = ?' : ''})
+       AND n.date > ? ORDER BY n.date DESC LIMIT 120`
+  ).bind(...(mine ? [user.id] : []), Date.now() - 120 * 86400e3).all()).results;
+  if (!rows.length) ctx.waitUntil(fillNews(env, 12).catch(e => console.error('news on demand', e)));
+  return json({ items: rows.map(r => ({ ...shapeNews(r), name: r.name, img: r.header || null })) });
+}
+const shapeNews = r => ({ gid: r.gid, appid: r.appid, title: r.title, url: r.url, date: r.date, patch: !!r.patch, snippet: r.snippet, feed: r.feed });
 
 /* ------------------------------------------------------------------ hourly job */
 
@@ -858,7 +1013,10 @@ async function hourly(env) {
   // 2. Store info for library games (300 per run = 9 requests)
   try { await fillLibraryMeta(env, 300); } catch (e) { console.error('library meta', e); }
 
-  // 3. Discovery charts, once a day
+  // 3. News + "last updated" for the games the crew plays
+  try { await fillNews(env, 12); } catch (e) { console.error('news', e); }
+
+  // 4. Discovery charts, once a day
   const last = await env.DB.prepare('SELECT MAX(fetched_at) AS t FROM charts').first();
   if (!last || !last.t || now - last.t > CHART_MAX_AGE) {
     try { await refreshCharts(env); } catch (e) { console.error('charts', e); }

@@ -175,6 +175,14 @@
     });
   });
 
+  // Fake install sizes, last-updated dates and last-played dates for fake-data mode
+  const DAY = 864e5;
+  GAMES.forEach((g, i) => {
+    g.size = [4096, 85 * 1024, 12 * 1024, 3 * 1024, 65 * 1024, 1536, 30 * 1024, 7 * 1024, 110 * 1024, 2048, 20 * 1024, 45 * 1024][i % 12];
+    g.lastUpdate = Date.now() - (g.id === 431240 ? 620 : g.id === 285900 ? 410 : [2, 9, 21, 40, 75, 130, 5, 14][i % 8]) * DAY;
+    g.lastNews = g.lastUpdate + 2 * DAY;
+  });
+
   // LIB[person][appid] = { h: lifetime hours, h2w: hours in last 2 weeks }
   const LIB = {};
   const bias = { james: 1.2, bradley: 1.1 };
@@ -185,9 +193,11 @@
       if (g.disc) return;
       const p = Math.min(0.95, (g.f2p ? g.pop + 0.1 : g.pop) * (bias[c.id] || 0.8));
       if (r() < p) {
+        const unplayed = r() < 0.18;
         LIB[c.id][g.id] = {
-          h: Math.round(Math.pow(r(), 2.2) * 600 + 1),
+          h: unplayed ? 0 : Math.round(Math.pow(r(), 2.2) * 600 + 1),
           h2w: r() < 0.3 ? Math.round(r() * 250) / 10 : 0,
+          lp: unplayed ? null : Date.now() - Math.round(Math.pow(r(), 2) * 400) * 864e5,
         };
       }
     });
@@ -205,5 +215,15 @@
     { id: 'p3', game: 602960, by: 'conor', to: ['james'], note: "James you'd love this, the sub always ends up exploding", votes: ['conor'], at: now - 50 * H },
   ];
 
-  window.BG_DATA = { CREW, GAMES, LIB, ME: 'james', PITCHES };
+  const NEWS = [
+    [1966720, 'Version 80 - The Blooming Update', true, 1, 'New creatures for the forest moons, a utility slot for purchased tools and a few new rooms.'],
+    [553850, 'Patch 1.004 is live', true, 2, 'Weapon balance changes, a fix for extraction crashes and a new stratagem.'],
+    [4000, 'Summer sale + workshop spotlight', false, 3, 'Our favourite community maps and addons this month.'],
+    [548430, 'Season 6 roadmap', false, 5, 'A look at what is coming to Hoxxes next: new biome, new enemies, new rock.'],
+    [892970, 'Hotfix 0.219.16', true, 8, 'Fixed an issue where boats could sink through docks. Again.'],
+    [730, 'Counter-Strike 2 update', true, 1, 'Map pool changes, animation fixes and a new case.'],
+    [3241660, 'R.E.P.O. update 0.2: new level', true, 12, 'A haunted museum, two new monsters and much louder screaming.'],
+  ].map(([appid, title, patch, daysAgo, snippet], i) => ({ gid: 'n' + i, appid, title, patch, snippet, date: Date.now() - daysAgo * 864e5 - i * 3600e3, url: `https://store.steampowered.com/news/app/${appid}` }));
+
+  window.BG_DATA = { CREW, GAMES, LIB, ME: 'james', PITCHES, NEWS };
 })();

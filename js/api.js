@@ -41,6 +41,7 @@
       id, name: g.name || `App ${id}`, f2p: !!g.is_free, price: ie ? ie.final / 100 : 0,
       coop: !!g.coop, pvp: !!g.pvp, multi: !!g.multi, known: !!g.meta_at, max: g.max_players || null, tags,
       sale: ie ? ie.discount || 0 : 0, desc: g.description || '',
+      size: g.size_mb || null, lastUpdate: g.last_update || null, lastNews: g.last_news || null,
       img: g.img || null, review: g.review || null, modded: !!g.modded, workshop: !!g.workshop, ggUrl: kurl || null,
       prices: { EUR: pr('ie'), GBP: pr('gb'), USD: pr('us') },
     };
@@ -54,7 +55,7 @@
     const LIB = {};
     Object.entries(crew.library).forEach(([uid, games]) => {
       LIB[uid] = {};
-      Object.entries(games).forEach(([appid, [m, m2]]) => { LIB[uid][appid] = { h: Math.round(m / 6) / 10, h2w: Math.round(m2 / 6) / 10 }; });
+      Object.entries(games).forEach(([appid, [m, m2, lp]]) => { LIB[uid][appid] = { h: Math.round(m / 6) / 10, h2w: Math.round(m2 / 6) / 10, lp: lp || null }; });
     });
     const GAMES = Object.entries(crew.games).map(([appid, g]) => normaliseGame(+appid, g));
     window.BG_DATA = { CREW, GAMES, LIB, ME: me.user.id, PITCHES: [], live: true, me: me.user, pendingInfo: crew.pending_info || 0 };

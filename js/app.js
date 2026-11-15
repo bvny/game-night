@@ -19,7 +19,7 @@
   const crewById = Object.fromEntries(CREW.map(c => [c.id, c]));
   const gameById = Object.fromEntries(GAMES.map(g => [g.id, g]));
   const CORE = LIVE ? [ME] : ['james', 'bradley', 'lukas'];
-  const VIEWS = ['tonight', 'shuffle', 'discovery', 'pitches', 'leaderboard', 'profile'];
+  const VIEWS = ['tonight', 'shuffle', 'discovery', 'pitches', 'news', 'leaderboard', 'profile'];
   const SYM = { EUR: '€', GBP: '£', USD: '$' };
   const CC = { EUR: 'ie', GBP: 'gb', USD: 'us' };
   const firstOther = (CREW.find(c => c.id !== ME && !c.private) || {}).id;
@@ -28,13 +28,14 @@
   const state = {
     view: 'tonight',
     on: new Set(savedOn.length ? savedOn : CORE),
-    tf: { single: false, coop: false, pvp: false, modded: false, fits: false, cheap: false },
-    sh: Object.assign({ pool: 'all', coop: false, pvp: false, free: false, fits: true, modded: false, single: false }, store.get('shuffle', {})),
+    tf: { single: false, coop: false, pvp: false, modded: false, small: false, fits: false, cheap: false },
+    sh: Object.assign({ pool: 'all', coop: false, pvp: false, free: false, fits: true, modded: false, single: false, small: false }, store.get('shuffle', {})),
     hidden: new Set(), history: [], current: null, rolling: false,
     pitches: LIVE ? [] : store.get('pitches', D.PITCHES || []),
     query: '', lb: 'recent', lbView: 'rank', cmp: [ME, firstOther],
     cur: store.get('cur', 'EUR'),
-    disc: { src: 'played', unowned: true, single: false, modded: false, cheap: false },
+    disc: { src: 'played', unowned: true, single: false, modded: false, small: false, cheap: false },
+    news: null, newsMine: false, newsPatch: false, gameNews: {},
     profileId: null, profiles: {}, libQuery: '', libFilter: 'all', libShow: 60,
   };
   let draft = null, confirmUnlink = false;
@@ -99,6 +100,16 @@
   const price = g => g.f2p ? 'Free' : hasPrice(g) ? money(P(g).steam) : '—';
   const cheap = g => g.f2p || (hasPrice(g) && P(g).steam < 20);
   const fmt = n => (Math.round(n * 10) / 10).toLocaleString();
+  const sizeTxt = mb => mb >= 1048576 ? (Math.round(mb / 104857.6) / 10) + ' TB' : mb >= 1024 ? (mb >= 10240 ? Math.round(mb / 1024) : Math.round(mb / 102.4) / 10) + ' GB' : mb + ' MB';
+  const SMALL_MB = 20 * 1024;
+  const small = g => g.size && g.size <= SMALL_MB;
+  function since(ts) {
+    if (!ts) return 'never';
+    const d = (Date.now() - ts) / 864e5;
+    if (d < 1) return 'today'; if (d < 2) return 'yesterday'; if (d < 14) return Math.floor(d) + ' days ago';
+    if (d < 60) return Math.floor(d / 7) + ' weeks ago'; if (d < 365) return Math.floor(d / 30) + ' months ago';
+    const y = d / 365; return (y < 2 ? Math.floor(d / 30) + ' months' : Math.floor(y) + ' years') + ' ago';
+  }
 
   function priceBlock(g) {
     if (g.f2p) return `<div class="prices"><span class="p-steam"><small>Steam</small><b>Free</b></span></div>`;
@@ -117,7 +128,7 @@
     return `<span class="av ${cls}" style="background:${c.color}" title="${esc(c.name)}">${esc(c.name[0])}</span>`;
   }
   const art = (g, details = false) => `<div class="art ${details ? 'clickable' : ''}" ${details ? `data-details="${g.id}"` : ''}><img src="${img(g)}" alt="" loading="lazy" data-id="${g.id}" onerror="bgImgFail(this)"><span class="fallback">${esc(g.name)}</span>${details ? '<span class="play">▶</span>' : ''}</div>`;
-  const tags = g => `<div class="tags">${g.modded ? '<span class="tag mod" title="Moddable (Steam Workshop / Nexus)">🔧 Modded</span>' : ''}${g.tags.map(t => `<span class="tag ${t === 'Co-op' ? 'coop' : t === 'PvP' ? 'pvp' : ''}">${esc(t)}</span>`).join('')}</div>`;
+  const tags = g => `<div class="tags">${g.size ? `<span class="tag sz ${g.size > 60 * 1024 ? 'big' : ''}" title="Install size (from Steam's requirements)">💾 ${sizeTxt(g.size)}</span>` : ''}${g.modded ? '<span class="tag mod" title="Moddable (Steam Workshop / Nexus)">🔧 Modded</span>' : ''}${g.tags.map(t => `<span class="tag ${t === 'Co-op' ? 'coop' : t === 'PvP' ? 'pvp' : ''}">${esc(t)}</span>`).join('')}</div>`;
   const RV = { 9: ['Overwhelmingly Positive', ':D', 'g2'], 8: ['Very Positive', ':)', 'g1'], 7: ['Positive', ':)', 'g1'], 6: ['Mostly Positive', ':)', 'g1'],
     5: ['Mixed', ':|', 'mid'], 4: ['Mostly Negative', ':(', 'b1'], 3: ['Negative', ':(', 'b1'], 2: ['Very Negative', ':(', 'b1'], 1: ['Overwhelmingly Negative', '>:(', 'b2'] };
   const compact = n => n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
@@ -281,13 +292,44 @@
       <div class="meta"><span>${playersTxt(g)}</span><span>${ownCount(g) ? `${ownCount(g)} of the crew own it` : 'Nobody in the crew owns it'}</span></div>
       ${s.owners.length ? `<div><span class="stack">${s.owners.map(p => av(p, 'sm')).join('')}</span></div>` : ''}
       ${priceBlock(g)}
+      ${lastPlayedHtml(g)}
+      ${updatedHtml(g)}
       ${g.review && RV[g.review.score] ? `<p class="hint" style="margin:0">Steam reviews: <b>${RV[g.review.score][0]}</b> (${g.review.pct}% of ${compact(g.review.count || 0)})</p>` : ''}
       <div style="display:flex;gap:10px;justify-content:flex-end;align-items:center;flex-wrap:wrap">${modLinks(g)}<a class="btn ghost" href="${storeUrl(g)}" target="_blank" rel="noopener">Steam page ↗</a>${pitchBtn(g, 'btn blurple')}</div>
     </div></div>`;
     $('#modal').hidden = false;
     hydrate(g, $('#modal .sheet'));
+    loadGameNews(g, $('#modal .sheet'));
   }
 
+  function lastPlayedHtml(g) {
+    const owners = CREW.filter(c => LIB[c.id] && LIB[c.id][g.id]).map(c => ({ c, lp: LIB[c.id][g.id].lp || null, on: state.on.has(c.id) }))
+      .sort((a, b) => (b.on - a.on) || ((b.lp || 0) - (a.lp || 0))).slice(0, 8);
+    if (!owners.length) return '';
+    return `<div class="lp"><span class="label">Last played</span><div class="lp-list">${owners.map(o =>
+      `<span class="lp-item ${o.lp && Date.now() - o.lp < 7 * 864e5 ? 'fresh' : !o.lp ? 'never' : ''}">${av(o.c.id, 'sm')} ${esc(o.c.name)} <b>${since(o.lp)}</b></span>`).join('')}</div></div>`;
+  }
+  function updatedHtml(g) {
+    const n = state.gameNews[g.id];
+    const lu = (n && n.last_update) || g.lastUpdate, ln = (n && n.last_news) || g.lastNews;
+    if (!lu && !ln) return `<div class="upd" data-upd>${LIVE ? '<span class="hint">Checking Steam for recent updates…</span>' : ''}</div>`;
+    const days = lu ? (Date.now() - lu) / 864e5 : null;
+    const dead = days != null && days > 365 && !g.f2p ? `<span class="dead">💀 No updates in ${since(lu).replace(' ago', '')}. Might be abandoned.</span>` : '';
+    const items = n && n.items && n.items.length ? `<ul class="news-mini">${n.items.slice(0, 3).map(x => `<li><a href="${esc(x.url)}" target="_blank" rel="noopener">${x.patch ? '🛠 ' : ''}${esc(x.title)}</a> <span>${since(x.date)}</span></li>`).join('')}</ul>` : '';
+    return `<div class="upd" data-upd>${lu ? `<span>🛠 Last updated <b>${since(lu)}</b></span>` : ''}${ln && ln !== lu ? `<span>📰 Last news <b>${since(ln)}</b></span>` : ''}${dead}${items}</div>`;
+  }
+  async function loadGameNews(g, root) {
+    if (!LIVE) {
+      const items = (D.NEWS || []).filter(x => x.appid === g.id);
+      const lastPatch = Math.max(0, ...items.filter(x => x.patch).map(x => x.date)), lastAny = Math.max(0, ...items.map(x => x.date));
+      state.gameNews[g.id] = { items, last_update: Math.max(lastPatch, g.lastUpdate || 0) || null, last_news: Math.max(lastAny, g.lastNews || 0) || null };
+    }
+    else if (!state.gameNews[g.id]) {
+      try { state.gameNews[g.id] = await API.call(`/api/news?appid=${g.id}`); } catch { return; }
+    }
+    const el = root && root.querySelector('[data-upd]');
+    if (el && root.isConnected) el.outerHTML = updatedHtml(g);
+  }
   function modLinks(g) {
     if (!g.modded) return '';
     const nexus = `https://www.google.com/search?q=${encodeURIComponent(g.name + ' site:nexusmods.com')}`;
@@ -299,7 +341,7 @@
     const ppl = people(), v = $('#view');
     if (!ppl.length) { v.innerHTML = `<div class="empty">Tick who's on tonight to see what you can play.</div>`; return; }
     const f = state.tf;
-    const pass = (g, s) => (f.single ? knownSingle(g) : isMulti(g)) && (!f.coop || g.coop) && (!f.pvp || g.pvp) && (!f.modded || g.modded) && (!f.fits || s.fits) && (!f.cheap || cheap(g));
+    const pass = (g, s) => (f.single ? knownSingle(g) : isMulti(g)) && (!f.coop || g.coop) && (!f.pvp || g.pvp) && (!f.modded || g.modded) && (!f.small || small(g)) && (!f.fits || s.fits) && (!f.cheap || cheap(g));
     const ready = [], almost = [], free = [];
     GAMES.forEach(g => {
       if (g.disc) return;
@@ -315,7 +357,7 @@
     free.sort((a, b) => b.s.owners.length - a.s.owners.length || b.s.groupH - a.s.groupH);
     const cap = list => list.slice(0, 48);
 
-    const fl = [['coop', 'Co-op'], ['pvp', 'PvP'], ['modded', '🔧 Modded'], ['fits', ppl.length > 1 ? `Fits all ${ppl.length} of us` : 'Fits the group'], ['cheap', `Under ${SYM[state.cur]}20`], ['single', 'Single-player only']];
+    const fl = [['coop', 'Co-op'], ['pvp', 'PvP'], ['modded', '🔧 Modded'], ['small', '💾 Under 20 GB'], ['fits', ppl.length > 1 ? `Fits all ${ppl.length} of us` : 'Fits the group'], ['cheap', `Under ${SYM[state.cur]}20`], ['single', 'Single-player only']];
     const pending = LIVE && D.pendingInfo ? `<p class="hint" style="margin:0 0 12px">⏳ Still fetching Steam info (co-op/PvP, prices) for ${D.pendingInfo} games. Refresh in a minute.</p>` : '';
     v.innerHTML = pending +
       `<div class="filters">${fl.map(([k, l]) => `<button class="toggle ${f[k] ? 'on' : ''}" data-tf="${k}">${l}</button>`).join('')}</div>` +
@@ -347,6 +389,7 @@
       if (state.hidden.has(g.id)) return false;
       if (o.pool !== 'shortlist' && (o.single ? !knownSingle(g) : knownSingle(g))) return false;
       if (o.modded && !g.modded) return false;
+      if (o.small && !small(g)) return false;
       const s = status(g, ppl);
       const owned = s.owners.length > 0;
       if (o.pool === 'shortlist') { if (!pitchedSet().has(+g.id)) return false; }
@@ -362,7 +405,7 @@
   function renderShuffle() {
     const p = pool(), o = state.sh, g = state.current && gameById[state.current];
     const pools = [['all', 'Everyone owns'], ['one', 'Missing ≤1'], ['shortlist', 'Shortlist'], ['any', 'Anything']];
-    const locks = [['fits', 'Fits everyone on'], ['coop', 'Co-op only'], ['pvp', 'PvP only'], ['free', 'Free only'], ['modded', '🔧 Modded only'], ['single', 'Single-player only']];
+    const locks = [['fits', 'Fits everyone on'], ['coop', 'Co-op only'], ['pvp', 'PvP only'], ['free', 'Free only'], ['modded', '🔧 Modded only'], ['small', '💾 Under 20 GB'], ['single', 'Single-player only']];
     $('#view').innerHTML = `<div class="shuffle"><div>
       ${g ? bigCard(g) : `<div class="bigcard"><div class="art noimg"><span class="fallback" style="font-size:40px">🎲</span></div>
         <div class="body"><h2>Can't decide?</h2><p class="desc">Roll a random game from what tonight's crew can play. Lock filters on the right and keep rolling until something sticks. Each roll shows the trailer and what the game's about.</p></div></div>`}
@@ -380,7 +423,7 @@
         </div></div>
         ${state.history.length ? `<div class="panel"><h3>Recent rolls</h3><div class="history">${state.history.map(h => `<div><span>${esc(gameById[h.id].name)}</span><span class="x">${h.verdict || ''}</span></div>`).join('')}</div></div>` : ''}
       </aside></div>`;
-    if (g && !state.rolling) hydrate(g, $('#bigcard'));
+    if (g && !state.rolling) { hydrate(g, $('#bigcard')); loadGameNews(g, $('#bigcard')); }
   }
   function bigCard(g) {
     const s = status(g);
@@ -395,6 +438,8 @@
       </div>
       <div style="margin-top:14px">${priceBlock(g)}</div>
       ${s.missing.length ? `<div style="margin-top:10px">${needsHtml(s)}</div>` : ''}
+      ${lastPlayedHtml(g)}
+      ${updatedHtml(g)}
       ${s.unknown.length ? `<div style="margin-top:8px">${unknownHtml(s)}</div>` : ''}
       <div style="margin-top:12px;font-size:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">${pitchBtn(g)}<a href="${storeUrl(g)}" target="_blank" rel="noopener">View on Steam ↗</a>${modLinks(g)}</div>
     </div></div>`;
@@ -451,10 +496,11 @@
       if (d.unowned && ownCount(g) > 0) return false;
       if (d.single ? !knownSingle(g) : !isMulti(g)) return false;
       if (d.modded && !g.modded) return false;
+      if (d.small && !small(g)) return false;
       if (d.cheap && !cheap(g)) return false;
       return true;
     });
-    const fl = [['unowned', 'Nobody owns it yet'], ['modded', '🔧 Modded'], ['cheap', `Under ${SYM[state.cur]}20`], ['single', 'Single-player only']];
+    const fl = [['unowned', 'Nobody owns it yet'], ['modded', '🔧 Modded'], ['small', '💾 Under 20 GB'], ['cheap', `Under ${SYM[state.cur]}20`], ['single', 'Single-player only']];
     const when = state.chartsUpdated ? ` · updated ${ago(state.chartsUpdated)}` : '';
     $('#view').innerHTML = `
       <div class="section-head" style="margin-top:0"><h2>Discovery</h2><span class="count">${list.length}</span><p>Steam's live charts${LIVE ? when : ''}. Click a game for the trailer.</p></div>
@@ -477,6 +523,41 @@
       </div>
       <div class="actions">${pitchBtn(g)}<button class="linkbtn" data-details="${g.id}">▶ Trailer &amp; details</button></div>
     </article>`;
+  }
+
+  /* ---------- news ---------- */
+  async function loadNews() {
+    if (!LIVE) { state.news = (D.NEWS || []).slice(); return render(); }
+    try { const r = await API.call('/api/news' + (state.newsMine ? '?mine=1' : '')); state.news = r.items; }
+    catch { state.news = []; toast('Could not load news.'); }
+    if (state.view === 'news') render();
+  }
+  function renderNews() {
+    if (!state.news) { $('#view').innerHTML = '<div class="empty">Loading news…</div>'; loadNews(); return; }
+    const mineSet = new Set(Object.keys(LIB[ME] || {}).map(Number));
+    const list = state.news.filter(n => (!state.newsPatch || n.patch) && (LIVE || !state.newsMine || mineSet.has(n.appid)))
+      .sort((a, b) => b.date - a.date);
+    const day = ts => { const d = (Date.now() - ts) / 864e5; return d < 1 ? 'Today' : d < 2 ? 'Yesterday' : d < 7 ? 'This week' : d < 31 ? 'This month' : 'Earlier'; };
+    let last = '';
+    $('#view').innerHTML = `
+      <div class="section-head" style="margin-top:0"><h2>News</h2><p>Updates and announcements for games the crew owns.</p></div>
+      <div class="filters" style="margin-bottom:18px">
+        <button class="toggle ${!state.newsMine ? 'on' : ''}" data-newsmine="0">Whole crew</button>
+        <button class="toggle ${state.newsMine ? 'on' : ''}" data-newsmine="1">My games</button>
+        <button class="toggle ${state.newsPatch ? 'on' : ''}" data-newspatch>🛠 Updates only</button>
+      </div>
+      ${list.length ? list.map(n => {
+        const g = gameById[n.appid] || { id: n.appid, name: n.name || 'App ' + n.appid, img: n.img, tags: [] };
+        const head = day(n.date) !== last ? `<h3 class="news-day">${(last = day(n.date))}</h3>` : '';
+        return `${head}<article class="news-item">
+          <div class="news-art">${art(g, true)}</div>
+          <div class="news-body">
+            <div class="news-top"><button class="linkbtn n" data-details="${g.id}">${esc(g.name)}</button>${n.patch ? '<span class="tag patch">🛠 Update</span>' : ''}<span class="news-when">${since(n.date)}</span></div>
+            <a class="news-title" href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a>
+            ${n.snippet ? `<p>${esc(n.snippet)}${n.snippet.length >= 238 ? '…' : ''}</p>` : ''}
+            <div class="news-foot"><span>${ownCount(g)} of the crew own it</span>${g.size ? `<span>💾 ${sizeTxt(g.size)}</span>` : ''}</div>
+          </div></article>`;
+      }).join('') : `<div class="empty">${LIVE ? 'No news yet. It fills in as the backend checks the games the crew plays. Check back in a bit.' : 'Nothing here.'}</div>`}`;
   }
 
   /* ---------- pitches ---------- */
@@ -509,7 +590,7 @@
     const res = [...new Map([...remote, ...local].map(g => [g.id, g])).values()].slice(0, 10);
     if (!res.length && LIVE && state.searchQ !== q) return `<div class="empty">Searching Steam…</div>`;
     if (!res.length) return `<div class="empty">No matches for “${esc(state.query)}”.</div>`;
-    return res.map(g => `<div class="result">${art(g, true)}<div><b>${esc(g.name)}</b><small>${ownCount(g)} of the crew own it</small>${priceBlock(g)}</div>${pitchBtn(g, 'btn sm')}</div>`).join('');
+    return res.map(g => `<div class="result">${art(g, true)}<div><b>${esc(g.name)}</b><small>${ownCount(g)} of the crew own it${g.size ? ` · 💾 ${sizeTxt(g.size)}` : ''}</small>${priceBlock(g)}</div>${pitchBtn(g, 'btn sm')}</div>`).join('');
   }
   function pitchHtml(p) {
     const g = gameById[p.game], mine = p.votes.includes(ME);
@@ -559,6 +640,10 @@
       'the grind never stops (it should)', 'certified chair fossil'],
     owned: ['Steam sale victim', 'the backlog is load-bearing', "Gabe's favourite customer", 'buys games, plays none', 'collector, not a player',
       'wallet left the chat', '"I\'ll play it eventually"'],
+    value: ['account worth more than their car', "Gabe's retirement fund", 'financially irresponsible, digitally rich', 'could have bought a house',
+      'the wallet is crying', 'living proof sales work'],
+    shame: ['money well spent (not)', 'bought it, never launched it', 'Steam sale’s favourite victim', 'the backlog is load-bearing',
+      '“it was only €3 though”', 'donating to Valve, basically'],
   };
   function tagline(c, mode) {
     // Same line for the whole week, so it doesn't change on every refresh
@@ -568,32 +653,45 @@
     const list = TAGLINES[mode];
     return list[h % list.length];
   }
+  const fullPrice = g => !g || g.f2p ? 0 : (P(g).base || P(g).steam || 0);
   function rankingsHtml() {
     const pub = CREW.filter(c => !c.private), mode = state.lb;
+    const money_ = mode === 'value' || mode === 'shame';
     const rows = pub.map(c => {
       const lib = LIB[c.id] || {}, ids = Object.keys(lib);
+      const per = id => mode === 'recent' ? lib[id].h2w : mode === 'all' ? lib[id].h
+        : mode === 'value' ? fullPrice(gameById[id]) : mode === 'shame' ? (lib[id].h ? 0 : fullPrice(gameById[id])) : 1;
       let top = null, topV = 0;
-      ids.forEach(id => { const v = mode === 'recent' ? lib[id].h2w : lib[id].h; if (v > topV) { topV = v; top = id; } });
-      const val = mode === 'recent' ? ids.reduce((a, id) => a + lib[id].h2w, 0)
-        : mode === 'all' ? ids.reduce((a, id) => a + lib[id].h, 0) : ids.length;
-      return { c, val: Math.round(val * 10) / 10, top, topV };
+      ids.forEach(id => { const v = per(id); if (v > topV) { topV = v; top = id; } });
+      const val = ids.reduce((a, id) => a + per(id), 0);
+      const extra = mode === 'shame' ? ids.filter(id => !lib[id].h && fullPrice(gameById[id]) > 0).length : 0;
+      return { c, val: Math.round(val * 100) / 100, top, topV, extra };
     }).sort((a, b) => b.val - a.val);
     const max = rows[0] ? rows[0].val || 1 : 1;
-    const unit = { recent: 'hrs · 2 weeks', all: 'hrs · all time', owned: 'games' }[mode];
+    const unit = { recent: 'hrs · 2 weeks', all: 'hrs · all time', owned: 'games', value: 'full Steam price', shame: 'never launched' }[mode];
+    const favLine = r => {
+      if (!r.top || !r.topV) return '';
+      const n = esc(gname(r.top));
+      if (mode === 'value') return `Priciest: ${n} · ${money(r.topV)}`;
+      if (mode === 'shame') return `${r.extra} unplayed games · worst: ${n} (${money(r.topV)})`;
+      if (mode === 'owned') return '';
+      return `Mostly ${n} · ${fmt(r.topV)}h`;
+    };
     const together = GAMES.filter(g => !g.disc).map(g => {
       const pl = pub.filter(c => owns(c.id, g.id));
       return { g, n: pl.length, h: pl.reduce((a, c) => a + LIB[c.id][g.id].h, 0) };
     }).filter(x => x.n >= 2 && x.h > 0).sort((a, b) => b.h - a.h).slice(0, 8);
-    const modes = [['recent', 'Last 2 weeks'], ['all', 'All time'], ['owned', 'Games owned']];
+    const modes = [['recent', 'Last 2 weeks'], ['all', 'All time'], ['owned', 'Games owned'], ['value', '💰 Account value'], ['shame', '🔥 Unplayed spend']];
     const priv = CREW.filter(c => c.private).map(c => c.name).join(', ');
     const gname = id => (gameById[id] || {}).name || 'something';
     return `<div class="lb-layout"><div>
         <div class="filters" style="margin-bottom:16px">${modes.map(([k, l]) => `<button class="toggle ${mode === k ? 'on' : ''}" data-lb="${k}">${l}</button>`).join('')}</div>
         ${rows.map((r, i) => `<div class="lbrow ${i === 0 ? 'gold' : ''}">
           <div class="rank-b r${i < 3 ? i + 1 : 0}">${i + 1}</div>${av(r.c.id, 'lg')}
-          <div class="who"><div class="who-top"><button class="linkbtn name" data-view="profile" data-profile="${r.c.id}">${esc(r.c.name)}</button>${i === 0 && r.val > 0 ? `<span class="tagline">${esc(tagline(r.c, mode))}</span>` : ''}</div>${mode !== 'owned' && r.top && r.topV ? `<div class="fav">Mostly ${esc(gname(r.top))} · ${fmt(r.topV)}h</div>` : ''}
+          <div class="who"><div class="who-top"><button class="linkbtn name" data-view="profile" data-profile="${r.c.id}">${esc(r.c.name)}</button>${i === 0 && r.val > 0 ? `<span class="tagline">${esc(tagline(r.c, mode))}</span>` : ''}</div>${favLine(r) ? `<div class="fav">${favLine(r)}</div>` : ''}
             <div class="bar"><i style="width:${(r.val / max) * 100}%"></i></div></div>
-          <div class="val">${fmt(r.val)}<small>${unit}</small></div></div>`).join('')}
+          <div class="val">${money_ ? money(r.val) : fmt(r.val)}<small>${unit}</small></div></div>`).join('')}
+        ${money_ ? `<p class="hint">${mode === 'value' ? 'What every game in each library would cost at today’s full Steam price.' : 'Full Steam price of games bought and never launched. Steam doesn’t share real purchase history, so this is the closest honest number.'} Games still loading prices count as zero.</p>` : ''}
         <p class="hint">${priv ? esc(priv) + ' not shown (Steam private or not linked). ' : ''}Nightly snapshots will add weekly and monthly boards.</p>
       </div>
       <div class="panel"><h3>Most played together</h3><ul class="together">
@@ -614,6 +712,8 @@
       ['Hours · last 2 weeks', sum(la, 'h2w'), sum(lb, 'h2w')],
       ['Hours · all time', sum(la, 'h'), sum(lb, 'h')],
       ['Games owned', Object.keys(la).length, Object.keys(lb).length],
+      ['Account value', Object.keys(la).reduce((s, id) => s + fullPrice(gameById[id]), 0), Object.keys(lb).reduce((s, id) => s + fullPrice(gameById[id]), 0), true],
+      ['Unplayed spend', Object.keys(la).reduce((s, id) => s + (la[id].h ? 0 : fullPrice(gameById[id])), 0), Object.keys(lb).reduce((s, id) => s + (lb[id].h ? 0 : fullPrice(gameById[id])), 0), true],
     ];
     const both = Object.keys(la).filter(id => lb[id] && gameById[id]).map(id => ({ g: gameById[id], a: la[id].h, b: lb[id].h })).sort((x, y) => (y.a + y.b) - (x.a + x.b));
     const only = (l1, l2) => Object.keys(l1).filter(id => !l2[id] && gameById[id]).map(id => ({ g: gameById[id], h: l1[id].h })).sort((x, y) => y.h - x.h).slice(0, 6);
@@ -627,10 +727,10 @@
         <div class="vs">VS</div>
         <div class="cmp-side right">${sel(1, b)}<button class="linkbtn" data-view="profile" data-profile="${b}" title="View profile">${av(b, 'xl')}</button></div>
       </div>
-      <div class="cmp-stats">${stats.map(([l, x, y]) => { const t = (x + y) || 1; return `<div class="cmp-stat">
-        <b class="${x > y ? 'win' : ''}">${fmt(x)}</b>
+      <div class="cmp-stats">${stats.map(([l, x, y, isMoney]) => { const t = (x + y) || 1; const f = isMoney ? money : fmt; return `<div class="cmp-stat">
+        <b class="${x > y ? 'win' : ''}">${f(x)}</b>
         <div class="mid"><span class="label">${l}</span><div class="split"><i style="width:${(x / t) * 100}%;background:${ca}"></i><i style="width:${(y / t) * 100}%;background:${cb}"></i></div></div>
-        <b class="${y > x ? 'win' : ''}">${fmt(y)}</b></div>`; }).join('')}
+        <b class="${y > x ? 'win' : ''}">${f(y)}</b></div>`; }).join('')}
         <div class="cmp-stat"><b>${both.length}</b><div class="mid"><span class="label">Games you both own</span></div><b>${both.length}</b></div>
       </div>
       <div class="cmp-grid">
@@ -809,7 +909,7 @@
     const v = state.view;
     $$('.tabs a').forEach(a => a.classList.toggle('active', a.dataset.view === v));
     $('#crewPanel').hidden = !(v === 'tonight' || v === 'shuffle');
-    ({ tonight: renderTonight, shuffle: renderShuffle, discovery: renderDiscovery, pitches: renderPitches, leaderboard: renderLb, profile: renderProfile })[v]();
+    ({ tonight: renderTonight, shuffle: renderShuffle, discovery: renderDiscovery, pitches: renderPitches, news: renderNews, leaderboard: renderLb, profile: renderProfile })[v]();
     renderCur();
   }
   // The address bar always stays on the bare site; the current tab lives in sessionStorage
@@ -885,6 +985,8 @@
       catch { toast('Could not delete that pitch.'); }
       return;
     }
+    if (d.newsmine !== undefined) { state.newsMine = d.newsmine === '1'; state.news = LIVE ? null : state.news; render(); return; }
+    if ('newspatch' in d) { state.newsPatch = !state.newsPatch; render(); return; }
     if (d.lb) { state.lb = d.lb; render(); return; }
     if (d.lbv) { state.lbView = d.lbv; render(); return; }
     if (d.cur) { state.cur = d.cur; store.set('cur', d.cur); render(); if (draft) renderModal(); return; }
