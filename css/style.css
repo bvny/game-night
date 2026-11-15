@@ -170,6 +170,23 @@ textarea{width:100%;border:2px solid var(--ink);border-radius:10px;padding:10px;
           mask:radial-gradient(circle 22px at 22px 37px,#000 98%,transparent) 0 0/44px 100% repeat-x,linear-gradient(#000,#000) 0 0/100% 37px no-repeat}
 footer{text-align:center;font:12px 'Space Mono';color:var(--muted);padding:18px 0 30px;letter-spacing:.06em}
 
+/* currency + prices + discovery */
+.cur{display:flex;border:2px solid var(--ink);border-radius:10px;overflow:hidden}
+.cur button{border:0;background:var(--paper);width:32px;height:30px;font-weight:800}
+.cur button+button{border-left:2px solid var(--ink)}
+.cur button.on{background:var(--yellow)}
+.prices{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch}
+.prices>*{display:flex;align-items:baseline;gap:6px;border:1.5px solid var(--ink);border-radius:8px;padding:4px 8px;font-size:14px;text-decoration:none;background:#fff}
+.prices small{font:700 10px 'Space Mono';text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.prices s{color:var(--muted);font-size:12px}
+.prices em{font-style:normal;font-weight:800;background:var(--green);color:#fff;border-radius:4px;padding:0 5px;font-size:12px}
+.p-keys{background:#EEF0FF!important}
+.p-keys:hover{background:#DDE1FF!important}
+.prices .best{border-width:2.5px;box-shadow:2px 2px 0 var(--green);position:relative}
+.prices .best::after{content:'cheapest';position:absolute;top:-9px;right:6px;background:var(--green);color:#fff;font:700 9px 'Space Mono';text-transform:uppercase;padding:0 4px;border-radius:3px}
+.rank{position:absolute;top:8px;left:8px;background:var(--yellow);border:2px solid var(--ink);border-radius:8px;padding:1px 8px;font-family:'Archivo Black';font-size:15px;box-shadow:2px 2px 0 var(--ink)}
+.disc-bar{display:flex;flex-wrap:wrap;gap:14px;align-items:center}
+
 @media (max-width:880px){
   .top-inner{height:auto;flex-wrap:wrap;padding:10px 20px;gap:10px}
   .tabs{order:3;width:100%;margin:0;overflow-x:auto}

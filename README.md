@@ -11,8 +11,11 @@ Group game finder for the Burrito Gang Discord, hosted at **gaymers.burritogang.
 |---|---|
 | **Tonight** | Tick who's on. Shows games *everyone owns*, games only 1–2 people are *missing* (with price), and *free-to-play* picks. Filters: co-op, PvP, fits group size, under €20. |
 | **Shuffle** | Coolors-style: press **Space** to roll a random game from the pool. Choose the pool (everyone owns / missing ≤1 / anything), lock filters, 👎 to hide a game for the session, 👍 to post the pick to Discord. |
+| **Discovery** | Steam's Most Played / Top Sellers / On Sale charts, filtered to games nobody in the crew owns. Multiplayer-only and under-20 filters. |
 | **Pitches** | Search for a game and "Pitch it" to everyone or specific people with a note (shows a Discord preview). Pitches go on a shortlist the group votes on. |
 | **Leaderboard** | Hours in the last 2 weeks, all-time hours, games owned, and "most played together". |
+
+Prices show in **€, £ or $** (picker in the header, remembered per browser). Every price shows the Steam price and the cheapest keyshop price, with the cheaper one highlighted.
 
 Private Steam profiles (e.g. Lukas) show as *unknown*, so they never block a game from showing up.
 
@@ -43,5 +46,7 @@ No build step. Open `index.html` in a browser to try it locally.
    - Shared pitches and votes
    - A nightly cron job that snapshots playtime
 2. **Swap `js/data.js` for `fetch()` calls** to the Worker.
-3. **Discord webhook** for posts to `#game-pitches`.
-4. **Group-tagged max player counts** (Steam doesn't publish them).
+3. **Prices.** Steam prices from the store `appdetails` endpoint with `cc=ie` / `gb` / `us`. Cheapest keyshop price (Loaded, G2A, Eneba, etc.) from the free **GG.deals API** by Steam app ID with a `region` param. GG.deals' terms require crediting them with a link and keeping their referral links. It gives one "cheapest keyshop" figure, not a price per shop; the link goes to the GG.deals page that lists every shop.
+4. **Discovery charts.** `ISteamChartsService/GetMostPlayedGames` plus `store.steampowered.com/api/featuredcategories` (top sellers, specials), cached daily.
+5. **Discord webhook** for posts to `#game-pitches`.
+6. **Group-tagged max player counts** (Steam doesn't publish them).

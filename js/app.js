@@ -12,7 +12,8 @@
   const crewById = Object.fromEntries(CREW.map(c => [c.id, c]));
   const gameById = Object.fromEntries(GAMES.map(g => [g.id, g]));
   const CORE = ['james', 'bradley', 'lukas'];
-  const VIEWS = ['tonight', 'shuffle', 'pitches', 'leaderboard'];
+  const VIEWS = ['tonight', 'shuffle', 'discovery', 'pitches', 'leaderboard'];
+  const SYM = { EUR: '€', GBP: '£', USD: '$' };
 
   const state = {
     view: 'tonight',
@@ -22,6 +23,8 @@
     hidden: new Set(), history: [], current: null, rolling: false,
     pitches: store.get('pitches', D.PITCHES),
     query: '', lb: 'recent',
+    cur: store.get('cur', 'EUR'),
+    disc: { src: 'played', unowned: true, multi: true, cheap: false },
   };
   let draft = null;
 
@@ -44,7 +47,19 @@
 
   const img = g => `https://cdn.cloudflare.steamstatic.com/steam/apps/${g.id}/header.jpg`;
   const storeUrl = g => `https://store.steampowered.com/app/${g.id}/`;
-  const price = g => g.f2p ? 'Free' : '€' + g.price.toFixed(2);
+  const money = v => SYM[state.cur] + v.toFixed(2);
+  const P = g => g.prices[state.cur];
+  const price = g => g.f2p ? 'Free' : money(P(g).steam);
+  const cheap = g => g.f2p || P(g).steam < 20;
+  const ggUrl = g => `https://gg.deals/steam/app/${g.id}/`;
+  function priceBlock(g) {
+    if (g.f2p) return `<div class="prices"><span class="p-steam"><small>Steam</small><b>Free</b></span></div>`;
+    const p = P(g), steamBest = !p.key || p.steam <= p.key;
+    return `<div class="prices">
+      <span class="p-steam ${steamBest ? 'best' : ''}"><small>Steam</small>${g.sale ? `<s>${money(p.base)}</s>` : ''}<b>${money(p.steam)}</b>${g.sale ? `<em>-${g.sale}%</em>` : ''}</span>
+      ${p.key ? `<a class="p-keys ${steamBest ? '' : 'best'}" href="${ggUrl(g)}" target="_blank" rel="noopener" title="Cheapest keyshop (Loaded, G2A, etc.) via GG.deals"><small>Keys from</small><b>${money(p.key)}</b> ↗</a>` : ''}
+    </div>`;
+  }
   const av = (pid, cls = '') => { const c = crewById[pid]; return `<span class="av ${cls}" style="background:${c.color}" title="${esc(c.name)}">${esc(c.name[0])}</span>`; };
   const art = g => `<div class="art"><img src="${img(g)}" alt="" loading="lazy" onerror="this.parentNode.classList.add('noimg')"><span class="fallback">${esc(g.name)}</span></div>`;
   const tags = g => `<div class="tags">${g.tags.map(t => `<span class="tag ${t === 'Co-op' ? 'coop' : t === 'PvP' ? 'pvp' : ''}">${esc(t)}</span>`).join('')}</div>`;
@@ -76,6 +91,10 @@
     return `<svg viewBox="0 0 ${map[0].length} ${map.length}" shape-rendering="crispEdges" aria-hidden="true">${rects}</svg>`;
   }
 
+  function renderCur() {
+    $('#cur').innerHTML = Object.entries(SYM).map(([k, s]) => `<button class="${state.cur === k ? 'on' : ''}" data-cur="${k}" title="${k}">${s}</button>`).join('');
+  }
+
   /* ---------- crew ---------- */
   function renderCrew() {
     $('#crew').innerHTML = CREW.map(c =>
@@ -88,7 +107,7 @@
     const ppl = people(), v = $('#view');
     if (!ppl.length) { v.innerHTML = `<div class="empty">Tick who's on tonight to see what you can play.</div>`; return; }
     const f = state.tf;
-    const pass = (g, s) => (!f.coop || g.coop) && (!f.pvp || g.pvp) && (!f.fits || s.fits) && (!f.cheap || g.f2p || g.price < 20);
+    const pass = (g, s) => (!f.coop || g.coop) && (!f.pvp || g.pvp) && (!f.fits || s.fits) && (!f.cheap || cheap(g));
     const ready = [], almost = [], free = [];
     GAMES.forEach(g => {
       const s = status(g, ppl); if (!pass(g, s)) return;
@@ -98,10 +117,10 @@
       else if (s.missing.length <= 2 && s.owners.length) almost.push(item);
     });
     ready.sort((a, b) => b.s.groupH - a.s.groupH);
-    almost.sort((a, b) => a.s.missing.length - b.s.missing.length || a.g.price - b.g.price);
+    almost.sort((a, b) => a.s.missing.length - b.s.missing.length || P(a.g).steam - P(b.g).steam);
     free.sort((a, b) => b.s.owners.length - a.s.owners.length);
 
-    const fl = [['coop', 'Co-op'], ['pvp', 'PvP'], ['fits', `Fits all ${ppl.length} of us`], ['cheap', 'Under €20']];
+    const fl = [['coop', 'Co-op'], ['pvp', 'PvP'], ['fits', `Fits all ${ppl.length} of us`], ['cheap', `Under ${SYM[state.cur]}20`]];
     v.innerHTML =
       `<div class="filters">${fl.map(([k, l]) => `<button class="toggle ${f[k] ? 'on' : ''}" data-tf="${k}">${l}</button>`).join('')}</div>` +
       section('Everyone owns', ready, 'Ready to launch right now.', 'ready') +
@@ -116,7 +135,7 @@
     return `<article class="gcard ${s.fits ? '' : 'dim'}">${art(g)}
       <div class="body"><h4>${esc(g.name)}</h4>${tags(g)}
         <div class="meta"><span>${playersTxt(g)}${s.fits ? '' : ' · too many of you'}</span><span>${s.groupH ? s.groupH + 'h together' : ''}</span></div>
-        ${kind === 'almost' ? needsHtml(s).replace('</div>', ` <span>· ${price(g)} each</span></div>`) : ''}
+        ${kind === 'almost' ? needsHtml(s) + priceBlock(g) : ''}
         ${s.owners.length ? `<div class="meta"><span class="stack">${s.owners.map(p => av(p, 'sm')).join('')}</span><span>${kind === 'free' ? s.owners.length + ' have played' : ''}</span></div>` : ''}
         ${unknownHtml(s)}
       </div>
@@ -167,11 +186,11 @@
       <h2 id="bigTitle">${esc(g.name)}</h2><div style="margin-top:12px">${tags(g)}</div>
       <div class="big-row">
         <div class="stat"><span class="label">Players</span><b>${g.max ? 'up to ' + g.max : 'lots'}</b></div>
-        <div class="stat"><span class="label">Price</span><b>${price(g)}</b></div>
         <div class="stat"><span class="label">Group hours</span><b>${s.groupH}h</b></div>
         <div class="stat"><span class="label">Owned by</span><b class="stack">${s.owners.map(p => av(p, 'sm')).join('') || '—'}</b></div>
       </div>
-      ${s.missing.length ? `<div style="margin-top:14px">${needsHtml(s)}</div>` : ''}
+      <div style="margin-top:14px">${priceBlock(g)}</div>
+      ${s.missing.length ? `<div style="margin-top:10px">${needsHtml(s)}</div>` : ''}
       ${s.unknown.length ? `<div style="margin-top:8px">${unknownHtml(s)}</div>` : ''}
       <div style="margin-top:12px;font-size:14px"><a href="${storeUrl(g)}" target="_blank" rel="noopener">View on Steam ↗</a> · <button class="linkbtn" data-pitch="${g.id}">Pitch it</button></div>
     </div></div>`;
@@ -200,6 +219,40 @@
     }, 60);
   }
 
+
+  /* ---------- discovery ---------- */
+  function renderDiscovery() {
+    const d = state.disc;
+    const srcs = [['played', 'Most played'], ['seller', 'Top sellers'], ['sale', 'On sale']];
+    const list = GAMES.filter(g => {
+      if (d.src === 'sale' ? !g.sale : !g[d.src]) return false;
+      if (d.unowned && ownCount(g) > 0) return false;
+      if (d.multi && !g.coop && !g.pvp) return false;
+      if (d.cheap && !cheap(g)) return false;
+      return true;
+    }).sort((a, b) => d.src === 'sale' ? b.sale - a.sale : a[d.src] - b[d.src]).slice(0, 20);
+    const fl = [['unowned', 'Nobody owns it yet'], ['multi', 'Multiplayer only'], ['cheap', `Under ${SYM[state.cur]}20`]];
+    $('#view').innerHTML = `
+      <div class="section-head" style="margin-top:0"><h2>Discovery</h2><p>What's trending on Steam that the crew hasn't got yet.</p></div>
+      <div class="disc-bar">
+        <div class="seg" style="min-width:330px">${srcs.map(([k, l]) => `<button class="${d.src === k ? 'on' : ''}" data-dsrc="${k}">${l}</button>`).join('')}</div>
+        <div class="filters">${fl.map(([k, l]) => `<button class="toggle ${d[k] ? 'on' : ''}" data-dtf="${k}">${l}</button>`).join('')}</div>
+      </div>
+      ${list.length ? `<div class="grid" style="margin-top:20px">${list.map(discCard).join('')}</div>` : `<div class="empty" style="margin-top:20px">Nothing matches. Try turning a filter off.</div>`}
+      <p class="hint" style="margin-top:20px">Prototype uses made-up charts. The live version pulls Steam's own Most Played, Top Sellers and Specials charts. Keyshop prices come from <a href="https://gg.deals" target="_blank" rel="noopener">GG.deals</a>.</p>`;
+  }
+  function discCard(g) {
+    const d = state.disc, n = ownCount(g);
+    const badge = d.src === 'sale' ? `-${g.sale}%` : `#${g[d.src]}`;
+    return `<article class="gcard"><div style="position:relative">${art(g)}<span class="rank">${badge}</span></div>
+      <div class="body"><h4>${esc(g.name)}</h4>${tags(g)}
+        <div class="meta"><span>${playersTxt(g)}</span><span>${n ? n + ' of the crew own it' : 'Nobody owns it'}</span></div>
+        ${priceBlock(g)}
+      </div>
+      <div class="actions"><button class="btn sm ghost" data-pitch="${g.id}">Pitch it</button><a href="${storeUrl(g)}" target="_blank" rel="noopener">Steam ↗</a></div>
+    </article>`;
+  }
+
   /* ---------- pitches ---------- */
   function renderPitches() {
     const sorted = [...state.pitches].sort((a, b) => b.votes.length - a.votes.length || b.at - a.at);
@@ -218,7 +271,7 @@
     if (!q) return `<div class="empty">Try “lethal”, “deep rock” or “golf”.</div>`;
     const res = GAMES.filter(g => g.name.toLowerCase().includes(q)).slice(0, 8);
     if (!res.length) return `<div class="empty">No matches for “${esc(state.query)}”.</div>`;
-    return res.map(g => `<div class="result">${art(g)}<div><b>${esc(g.name)}</b><small>${price(g)} · ${ownCount(g)} of the crew own it</small></div><button class="btn sm" data-pitch="${g.id}">Pitch it</button></div>`).join('');
+    return res.map(g => `<div class="result">${art(g)}<div><b>${esc(g.name)}</b><small>${ownCount(g)} of the crew own it</small>${priceBlock(g)}</div><button class="btn sm" data-pitch="${g.id}">Pitch it</button></div>`).join('');
   }
   function pitchHtml(p) {
     const g = gameById[p.game], mine = p.votes.includes(ME);
@@ -252,7 +305,7 @@
     return `<div class="discord"><div class="bot">Game Night<em>APP</em></div>
       <div>${mentions} ${esc(crewById[ME].name)} pitched a game 👀</div>
       <div class="embed"><b>${esc(g.name)}</b><div>${draft.note ? esc(draft.note) : '<i style="opacity:.6">No note</i>'}</div>
-      <div style="opacity:.7;font-size:12px;margin-top:4px">${price(g)} · ${ownCount(g)}/${CREW.length} of the crew own it</div></div></div>`;
+      <div style="opacity:.7;font-size:12px;margin-top:4px">Steam ${price(g)}${P(g).key ? ` · keys from ${money(P(g).key)}` : ''} · ${ownCount(g)}/${CREW.length} of the crew own it</div></div></div>`;
   }
 
   /* ---------- leaderboard ---------- */
@@ -295,7 +348,8 @@
     const v = state.view;
     $$('.tabs a').forEach(a => a.classList.toggle('active', a.dataset.view === v));
     $('#crewPanel').hidden = !(v === 'tonight' || v === 'shuffle');
-    ({ tonight: renderTonight, shuffle: renderShuffle, pitches: renderPitches, leaderboard: renderLb })[v]();
+    ({ tonight: renderTonight, shuffle: renderShuffle, discovery: renderDiscovery, pitches: renderPitches, leaderboard: renderLb })[v]();
+    renderCur();
   }
   function route() {
     const h = location.hash.slice(1);
@@ -340,6 +394,9 @@
       return;
     }
     if (d.lb) { state.lb = d.lb; render(); return; }
+    if (d.cur) { state.cur = d.cur; store.set('cur', d.cur); render(); if (draft) renderModal(); return; }
+    if (d.dsrc) { state.disc.src = d.dsrc; render(); return; }
+    if (d.dtf) { state.disc[d.dtf] = !state.disc[d.dtf]; render(); return; }
     if ('close' in d) { closeModal(); return; }
     if ('to' in d && draft) {
       if (!d.to) draft.to = [];
