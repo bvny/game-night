@@ -979,7 +979,7 @@
 
   /* ---------- init ---------- */
   if (LIVE) {
-    $('.mockbar').textContent = 'BETA · KEYSHOP PRICES COMING SOON';
+    $('.mockbar').hidden = true;
     const core = $('[data-crew=core]'); if (core) core.textContent = 'Just me';
   }
   $('#me').innerHTML = `<button class="me-btn" data-view="profile" data-profile="${ME}" title="Your profile">${av(ME)}<span>${esc(crewById[ME].name)}<small>Your profile</small></span></button>${LIVE ? '<button class="linkbtn logout" data-act="logout" title="Log out">Log out</button>' : ''}`;
