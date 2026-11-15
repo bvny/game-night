@@ -8,18 +8,25 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Outfit:wght@400;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/style.css">
+<script>
+  // Apply the saved (or system) theme before the page paints, so there's no flash
+  (function () { var t; try { t = localStorage.getItem('bg:theme'); } catch (e) {}
+    if (!t) t = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', t); })();
+</script>
 </head>
 <body>
 <header class="top">
   <div class="wrap top-inner">
-    <a class="brand" href="#tonight"><span id="burrito"></span><span>BURRITO GANG</span><small>game night</small></a>
+    <a class="brand" href="/" data-view="tonight"><span id="burrito"></span><span>BURRITO GANG</span><small>game night</small></a>
     <nav class="tabs">
-      <a href="#tonight" data-view="tonight">Tonight</a>
-      <a href="#shuffle" data-view="shuffle">Shuffle</a>
-      <a href="#discovery" data-view="discovery">Discovery</a>
-      <a href="#pitches" data-view="pitches">Pitches</a>
-      <a href="#leaderboard" data-view="leaderboard">Leaderboard</a>
+      <a href="/" data-view="tonight">Tonight</a>
+      <a href="/" data-view="shuffle">Shuffle</a>
+      <a href="/" data-view="discovery">Discovery</a>
+      <a href="/" data-view="pitches">Pitches</a>
+      <a href="/" data-view="leaderboard">Leaderboard</a>
     </nav>
+    <button class="theme-btn" id="themeBtn" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
     <div class="cur" id="cur" aria-label="Currency"></div>
     <div class="me" id="me"></div>
   </div>

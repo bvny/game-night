@@ -49,6 +49,9 @@ worker/SETUP.md     step-by-step backend setup
 - [x] Game details: Steam trailer (mp4 or HLS), description, genres and multiplayer categories
 - [x] Co-op / PvP / multiplayer flags, Steam tags, descriptions and IE / UK / US prices for whole libraries in one go (Steam's bulk store lookup)
 - [x] Discovery: Steam's top 100 Most Played, Top Sellers, Popular New Releases and On Sale, refreshed daily
+- [x] Dark mode (warm espresso, follows your system setting, toggle in the header), clean URLs (no #tabs)
+- [x] Profiles: change/unlink Steam, hide games from the site, stats deep dive (hours, tags, daily history, achievements, in-game stats, library value)
+- [x] Steam review smileys (:D :) :| :( >:( ), 🔧 Modded tag (Steam Workshop / Moddable), Single-player only filter, "Pitched ✓" buttons, #1 leaderboard taglines
 - [x] Shared pitches + votes, full Steam store search, posts to #game-night via webhook (pitches @mention the people they're for)
 
 ## Next steps

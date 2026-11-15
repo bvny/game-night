@@ -133,7 +133,7 @@ The webhook URL is a password for posting in that channel. Only ever paste it in
 
 ## Updating to a new version
 
-1. **Worker:** go to **Edit code**, select all, paste the new `worker/src/index.js`, and click **Deploy**. The database upgrades itself on the next request, so you don't need the console.
+1. **Worker:** go to **Edit code**, select all, paste the new `worker/src/index.js`, and click **Deploy**. The database upgrades itself on the next request, so you don't need the console. After an upgrade that adds new game info (like reviews or images), the site re-fetches Steam info for every game in the background. Expect a minute of "Still fetching Steam info".
 2. **Website:** upload the changed files to GitHub. Keep your edited `js/config.js`, or re-enter your Worker URL in the new one.
 
 ## Troubleshooting

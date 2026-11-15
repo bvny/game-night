@@ -39,6 +39,7 @@
       id, name: g.name || `App ${id}`, f2p: !!g.is_free, price: ie ? ie.final / 100 : 0,
       coop: !!g.coop, pvp: !!g.pvp, multi: !!g.multi, known: !!g.meta_at, max: g.max_players || null, tags,
       sale: ie ? ie.discount || 0 : 0, desc: g.description || '',
+      img: g.img || null, review: g.review || null, modded: !!g.modded, workshop: !!g.workshop,
       prices: { EUR: pr('ie'), GBP: pr('gb'), USD: pr('us') },
     };
   }
@@ -60,12 +61,13 @@
   window.BG_READY = (async () => {
     if (!API) return { mode: 'mock' };
     const h = new URLSearchParams(location.hash.slice(1));
-    if (h.get('auth')) { tok.set(h.get('auth')); history.replaceState(null, '', location.pathname + '#tonight'); }
+    if (h.get('auth')) { tok.set(h.get('auth')); history.replaceState(null, '', location.pathname); }
     if (h.get('auth_error')) { history.replaceState(null, '', location.pathname); return { mode: 'gate', reason: h.get('auth_error') }; }
     if (!tok.get()) return { mode: 'gate', reason: 'login' };
     try {
-      const [me, crew] = await Promise.all([call('/api/me'), call('/api/crew')]);
+      const [me, crew, pitches] = await Promise.all([call('/api/me'), call('/api/crew'), call('/api/pitches').catch(() => null)]);
       buildData(me, crew);
+      if (pitches) { window.BG_DATA.PITCHES = pitches.pitches; window.BG_DATA.pitchGames = pitches.games; }
       return { mode: 'live' };
     } catch (e) {
       if (e.status === 401) { tok.set(null); return { mode: 'gate', reason: 'login' }; }

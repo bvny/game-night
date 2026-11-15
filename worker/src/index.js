@@ -56,8 +56,14 @@ async function ensureSchema(env) {
     env.DB.prepare('CREATE TABLE IF NOT EXISTS pitches (id INTEGER PRIMARY KEY AUTOINCREMENT, appid INTEGER NOT NULL, by_user TEXT NOT NULL, to_users TEXT, note TEXT, created_at INTEGER NOT NULL)'),
     env.DB.prepare('CREATE TABLE IF NOT EXISTS votes (pitch_id INTEGER NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY (pitch_id, user_id))'),
   ]);
-  try { await env.DB.prepare('ALTER TABLE games ADD COLUMN description TEXT').run(); }
-  catch (e) { if (!/duplicate column/i.test(String(e && e.message || e))) throw e; }
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS hidden_games (user_id TEXT NOT NULL, appid INTEGER NOT NULL, PRIMARY KEY (user_id, appid))').run();
+  let added = false;
+  for (const col of ['description TEXT', 'header TEXT', 'review_score INTEGER', 'review_pct INTEGER', 'review_count INTEGER', 'modded INTEGER DEFAULT 0', 'workshop INTEGER DEFAULT 0']) {
+    try { await env.DB.prepare(`ALTER TABLE games ADD COLUMN ${col}`).run(); added = true; }
+    catch (e) { if (!/duplicate column/i.test(String(e && e.message || e))) throw e; }
+  }
+  // New store fields were added: re-fetch store info so every game gets them
+  if (added) await env.DB.prepare('UPDATE games SET meta_at = NULL').run();
   schemaReady = true;
 }
 
@@ -95,6 +101,8 @@ async function route(req, env, ctx) {
     if ((m = p.match(/^\/api\/pitches\/(\d+)\/vote$/)) && M === 'POST') return toggleVote(env, user, +m[1]);
     if ((m = p.match(/^\/api\/pitches\/(\d+)$/)) && M === 'DELETE') return deletePitch(env, user, +m[1]);
     if (p === '/api/announce' && M === 'POST') return announce(req, env, ctx, user);
+    if ((m = p.match(/^\/api\/profile\/(\d+)$/)) && M === 'GET') return profile(env, ctx, user, m[1]);
+    if (p === '/api/profile/hidden' && M === 'POST') return setHidden(req, env, user);
     if ((m = p.match(/^\/api\/game\/(\d+)$/)) && M === 'GET') return gameDetails(env, ctx, +m[1], url.searchParams.get('cc') || 'ie');
   }
   return json({ error: 'not_found' }, 404);
@@ -287,7 +295,7 @@ async function getItems(appids, cc, full) {
   const input = {
     ids: appids.map(appid => ({ appid })),
     context: { language: 'english', country_code: CC_UPPER[cc], steam_realm: 1 },
-    data_request: full ? { include_basic_info: true, include_tag_count: 12 } : {},
+    data_request: full ? { include_basic_info: true, include_tag_count: 20, include_assets: true, include_reviews: true } : {},
   };
   const r = await fetch(`${STEAM_API}/IStoreBrowseService/GetItems/v1/?input_json=${encodeURIComponent(JSON.stringify(input))}`);
   if (!r.ok) throw new Error('GetItems ' + r.status);
@@ -312,9 +320,19 @@ function parseItem(it, names) {
   const coop = cats.some(x => COOP_CATS.has(x)) || has(COOP_TAGS);
   const pvp = cats.some(x => PVP_CATS.has(x)) || has(PVP_TAGS);
   const multi = coop || pvp || cats.some(x => MULTI_CATS.has(x)) || has(MULTI_TAGS);
+  const workshop = cats.includes(30); // Steam Workshop
+  const modded = workshop || tags.includes('Moddable') || tags.includes('Mod');
+  const a = it.assets || {};
+  const header = a.asset_url_format && a.header
+    ? `https://shared.akamai.steamstatic.com/store_item_assets/${a.asset_url_format.replace('${FILENAME}', a.header)}` : null;
+  const rv = it.reviews && (it.reviews.summary_filtered || it.reviews.summary_language_specific);
   return {
-    appid: it.appid || it.id, name: it.name || null, is_free: !!it.is_free, coop, pvp, multi,
-    tags: tags.slice(0, 6), description: cleanText(it.basic_info && it.basic_info.short_description),
+    appid: it.appid || it.id, name: it.name || null, is_free: !!it.is_free, coop, pvp, multi, modded, workshop,
+    tags: tags.filter(t => t !== 'Moddable' && t !== 'Mod').slice(0, 6),
+    description: cleanText(it.basic_info && it.basic_info.short_description), header,
+    review_score: rv && rv.review_count ? rv.review_score : null,
+    review_pct: rv && rv.review_count ? rv.percent_positive : null,
+    review_count: rv ? rv.review_count || 0 : null,
   };
 }
 
@@ -340,10 +358,14 @@ async function refreshMeta(env, appids) {
       const g = parseItem(it, names);
       const prices = { ie: priceOf(it), gb: priceOf(G[id]), us: priceOf(U[id]) };
       stmts.push(env.DB.prepare(
-        `INSERT INTO games (appid, name, is_free, coop, pvp, multi, genres, description, prices, meta_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO games (appid, name, is_free, coop, pvp, multi, genres, description, prices, meta_at, header, review_score, review_pct, review_count, modded, workshop)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(appid) DO UPDATE SET name=excluded.name, is_free=excluded.is_free, coop=excluded.coop, pvp=excluded.pvp,
-           multi=excluded.multi, genres=excluded.genres, description=excluded.description, prices=excluded.prices, meta_at=excluded.meta_at`
-      ).bind(id, g.name, g.is_free ? 1 : 0, g.coop ? 1 : 0, g.pvp ? 1 : 0, g.multi ? 1 : 0, JSON.stringify(g.tags), g.description, JSON.stringify(prices), now));
+           multi=excluded.multi, genres=excluded.genres, description=excluded.description, prices=excluded.prices, meta_at=excluded.meta_at,
+           header=excluded.header, review_score=excluded.review_score, review_pct=excluded.review_pct, review_count=excluded.review_count,
+           modded=excluded.modded, workshop=excluded.workshop`
+      ).bind(id, g.name, g.is_free ? 1 : 0, g.coop ? 1 : 0, g.pvp ? 1 : 0, g.multi ? 1 : 0, JSON.stringify(g.tags), g.description, JSON.stringify(prices), now,
+        g.header, g.review_score, g.review_pct, g.review_count, g.modded ? 1 : 0, g.workshop ? 1 : 0));
       done++;
     }
     for (const id of chunk) if (!seen.has(id)) {
@@ -428,6 +450,8 @@ function shapeGame(g, withDesc) {
     name: g.name, is_free: !!g.is_free, coop: !!g.coop, pvp: !!g.pvp, multi: !!g.multi,
     max_players: g.max_players, tags: g.genres ? JSON.parse(g.genres) : [],
     prices: g.prices ? JSON.parse(g.prices) : null, meta_at: g.meta_at,
+    img: g.header || null, modded: !!g.modded, workshop: !!g.workshop,
+    review: g.review_score ? { score: g.review_score, pct: g.review_pct, count: g.review_count } : null,
     ...(withDesc ? { description: g.description || '' } : {}),
   };
 }
@@ -436,7 +460,7 @@ let lastLazyFill = 0;
 async function crew(env, ctx) {
   const [users, lib, games, missing] = await Promise.all([
     env.DB.prepare('SELECT id, name, avatar, steam_id, steam_private, game_count, last_sync FROM users ORDER BY name COLLATE NOCASE').all(),
-    env.DB.prepare('SELECT user_id, appid, minutes, minutes_2w FROM library').all(),
+    env.DB.prepare('SELECT l.user_id, l.appid, l.minutes, l.minutes_2w FROM library l WHERE NOT EXISTS (SELECT 1 FROM hidden_games h WHERE h.user_id = l.user_id AND h.appid = l.appid)').all(),
     env.DB.prepare('SELECT * FROM games WHERE appid IN (SELECT DISTINCT appid FROM library)').all(),
     env.DB.prepare('SELECT COUNT(*) AS n FROM games g WHERE g.meta_at IS NULL AND g.appid IN (SELECT appid FROM library)').first(),
   ]);
@@ -487,6 +511,86 @@ async function search(env, ctx, url) {
     }
   }
   return json({ results: items.filter(x => known[x.appid]).map(x => x.appid), games: known });
+}
+
+/* ------------------------------------------------------------------ profiles */
+
+async function profile(env, ctx, viewer, id) {
+  const u = await getUser(env, id);
+  if (!u) return json({ error: 'not_found' }, 404);
+  const self = viewer.id === id;
+  const rows = (await env.DB.prepare(
+    `SELECT l.appid, l.minutes, l.minutes_2w, g.name, g.genres, g.is_free, g.coop, g.pvp, g.multi, g.prices, g.header, g.modded, g.review_score,
+            (h.appid IS NOT NULL) AS hidden
+     FROM library l LEFT JOIN games g ON g.appid = l.appid
+     LEFT JOIN hidden_games h ON h.user_id = l.user_id AND h.appid = l.appid
+     WHERE l.user_id = ? ORDER BY l.minutes DESC`
+  ).bind(id).all()).results;
+  const lib = rows.filter(r => self || !r.hidden);
+  const snaps = (await env.DB.prepare('SELECT day, minutes, minutes_2w, games FROM snapshots WHERE user_id=? ORDER BY day DESC LIMIT 90').bind(id).all()).results.reverse();
+  const top = lib.filter(r => !r.hidden && r.minutes > 0).slice(0, 6).map(r => r.appid);
+  const extras = u.steam_id && !u.steam_private ? await steamExtras(env, ctx, u.steam_id, top) : null;
+  return json({
+    self,
+    user: { id: u.id, name: u.name, avatar: u.avatar, steam_linked: !!u.steam_id, steam_private: !!u.steam_private, last_sync: u.last_sync, game_count: u.game_count },
+    steam_id: self ? u.steam_id : undefined,
+    library: lib.map(r => {
+      const pr = r.prices ? JSON.parse(r.prices) : {};
+      return {
+        appid: r.appid, name: r.name, minutes: r.minutes, minutes_2w: r.minutes_2w, tags: r.genres ? JSON.parse(r.genres) : [],
+        multi: !!(r.multi || r.coop || r.pvp), free: !!r.is_free, modded: !!r.modded, img: r.header || null, review_score: r.review_score,
+        price: { ie: pr.ie ? pr.ie.initial : null, gb: pr.gb ? pr.gb.initial : null, us: pr.us ? pr.us.initial : null },
+        ...(self ? { hidden: !!r.hidden } : {}),
+      };
+    }),
+    snapshots: snaps,
+    extras,
+  });
+}
+
+async function steamExtras(env, ctx, sid, appids) {
+  const cache = caches.default;
+  const key = new Request(`https://cache.burrito.local/extras/${sid}/${appids.join(',')}`);
+  const hit = await cache.match(key);
+  if (hit) return hit.json();
+  const k = env.STEAM_API_KEY;
+  const out = { summary: null, level: null, achievements: [], stats: [] };
+  const get = async u => { try { const r = await fetch(u); return r.ok ? await r.json() : null; } catch { return null; } };
+  const [sum, lvl] = await Promise.all([
+    get(`${STEAM_API}/ISteamUser/GetPlayerSummaries/v2/?key=${k}&steamids=${sid}`),
+    get(`${STEAM_API}/IPlayerService/GetSteamLevel/v1/?key=${k}&steamid=${sid}`),
+  ]);
+  const pl = sum && sum.response && sum.response.players && sum.response.players[0];
+  if (pl) out.summary = { persona: pl.personaname, url: pl.profileurl, avatar: pl.avatarfull, created: pl.timecreated ? pl.timecreated * 1000 : null, country: pl.loccountrycode || null };
+  if (lvl && lvl.response && lvl.response.player_level != null) out.level = lvl.response.player_level;
+  await Promise.all(appids.map(async appid => {
+    const d = await get(`${STEAM_API}/ISteamUserStats/GetPlayerAchievements/v1/?key=${k}&steamid=${sid}&appid=${appid}`);
+    const a = d && d.playerstats && d.playerstats.achievements;
+    if (Array.isArray(a) && a.length) out.achievements.push({ appid, achieved: a.filter(x => x.achieved).length, total: a.length });
+  }));
+  await Promise.all(appids.slice(0, 3).map(async appid => {
+    const d = await get(`${STEAM_API}/ISteamUserStats/GetUserStatsForGame/v2/?key=${k}&steamid=${sid}&appid=${appid}`);
+    const st = d && d.playerstats && d.playerstats.stats;
+    if (Array.isArray(st) && st.length) out.stats.push({ appid, stats: pickStats(st) });
+  }));
+  ctx.waitUntil(cache.put(key, new Response(JSON.stringify(out), { headers: { 'Cache-Control': 'public, max-age=21600' } })));
+  return out;
+}
+
+// Keep the in-game stats people actually care about (kills, wins, time...), max 8
+function pickStats(stats) {
+  const score = n => /kill|death|win|mvp|headshot|match|round|time_played|damage|score|assist|played|contract|wave|level|distance/i.test(n) ? 2 : 0;
+  return stats.filter(s => typeof s.value === 'number' && s.value > 0 && !/^(last_|gi\.|stat_)/i.test(s.name))
+    .sort((a, b) => score(b.name) - score(a.name)).slice(0, 8).map(s => ({ name: s.name, value: s.value }));
+}
+
+async function setHidden(req, env, user) {
+  const b = await req.json().catch(() => ({}));
+  const appid = parseInt(b.appid, 10);
+  if (!appid) return json({ error: 'bad_request' }, 400);
+  if (b.hidden) await env.DB.prepare('INSERT OR IGNORE INTO hidden_games (user_id, appid) VALUES (?, ?)').bind(user.id, appid).run();
+  else await env.DB.prepare('DELETE FROM hidden_games WHERE user_id=? AND appid=?').bind(user.id, appid).run();
+  return json({ ok: true, hidden: !!b.hidden });
 }
 
 /* ------------------------------------------------------------------ pitches + Discord */

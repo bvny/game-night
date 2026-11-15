@@ -88,6 +88,20 @@
     X(2567870, 'Chained Together', 4.99, { seller: 17, sale: 20, coop: true, max: 4, tags: ['Co-op', 'Climbing'] }),
   );
 
+  // Fake review scores, moddability and a couple of single-player games for fake-data mode
+  GAMES.push(
+    G(367520, 'Hollow Knight', 14.79, { tags: ['Metroidvania', 'Singleplayer'], pop: .55 }),
+    G(1145360, 'Hades', 24.50, { tags: ['Roguelike', 'Singleplayer'], pop: .5 }),
+  );
+  const MOD = [4000, 271590, 892970, 108600, 413150, 550, 602960, 252490, 632360, 105600, 227300, 526870, 251570, 322330, 1623730, 1086940, 367520];
+  const WORKSHOP = [4000, 550, 602960, 108600, 413150, 227300, 251570, 322330, 105600];
+  const SCORES = [9, 9, 8, 8, 8, 7, 6, 9, 5, 8, 4, 9, 8];
+  GAMES.forEach((g, i) => {
+    g.modded = MOD.includes(g.id); g.workshop = WORKSHOP.includes(g.id);
+    const score = g.id === 2246340 ? 6 : g.id === 2507950 ? 3 : SCORES[i % SCORES.length];
+    g.review = { score, pct: { 9: 96, 8: 88, 7: 82, 6: 74, 5: 55, 4: 33, 3: 24 }[score], count: 2000 + ((g.id * 37) % 900000) };
+  });
+
   // Short descriptions (fake mode only; live mode pulls Steam's description + trailer).
   const DESC = {
     1966720: 'Co-op scavenging on abandoned moons for a company that sees you as expendable. Hit the quota or else.',
@@ -141,6 +155,8 @@
     2001120: 'Two-player co-op adventure hopping between sci-fi and fantasy worlds. Needs exactly two.',
     962130: 'Shrunk to the size of an ant, survive a back garden with up to four players.',
     1621690: 'Underground mining sandbox adventure for up to 8 players.',
+    367520: 'Hand-drawn metroidvania through a ruined bug kingdom. Solo only.',
+    1145360: 'Fast roguelike dungeon crawler: fight your way out of the Underworld. Solo only.',
     2567870: 'Co-op climbing while chained to your mates. Communication is everything.',
   };
   GAMES.forEach(g => { g.desc = DESC[g.id] || ''; });
@@ -181,6 +197,7 @@
     LIB[p][id] = LIB[p][id] || { h: Math.round(r() * 300 + 20), h2w: Math.round(r() * 80) / 10 };
   }));
 
+  [367520, 1145360].forEach(id => { LIB.james[id] = LIB.james[id] || { h: Math.round(r() * 80 + 15), h2w: 0 }; });
   const now = Date.now(), H = 3600e3;
   const PITCHES = [
     { id: 'p1', game: 3241660, by: 'bradley', to: [], note: 'Looks class for 6 of us, cheap too', votes: ['bradley', 'conor', 'aoife'], at: now - 5 * H },

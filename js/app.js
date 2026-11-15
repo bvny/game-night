@@ -19,7 +19,7 @@
   const crewById = Object.fromEntries(CREW.map(c => [c.id, c]));
   const gameById = Object.fromEntries(GAMES.map(g => [g.id, g]));
   const CORE = LIVE ? [ME] : ['james', 'bradley', 'lukas'];
-  const VIEWS = ['tonight', 'shuffle', 'discovery', 'pitches', 'leaderboard'];
+  const VIEWS = ['tonight', 'shuffle', 'discovery', 'pitches', 'leaderboard', 'profile'];
   const SYM = { EUR: '€', GBP: '£', USD: '$' };
   const CC = { EUR: 'ie', GBP: 'gb', USD: 'us' };
   const firstOther = (CREW.find(c => c.id !== ME && !c.private) || {}).id;
@@ -28,15 +28,16 @@
   const state = {
     view: 'tonight',
     on: new Set(savedOn.length ? savedOn : CORE),
-    tf: { multi: true, coop: false, pvp: false, fits: false, cheap: false },
-    sh: Object.assign({ pool: 'all', coop: false, pvp: false, free: false, fits: true }, store.get('shuffle', {})),
+    tf: { single: false, coop: false, pvp: false, modded: false, fits: false, cheap: false },
+    sh: Object.assign({ pool: 'all', coop: false, pvp: false, free: false, fits: true, modded: false, single: false }, store.get('shuffle', {})),
     hidden: new Set(), history: [], current: null, rolling: false,
     pitches: LIVE ? [] : store.get('pitches', D.PITCHES || []),
     query: '', lb: 'recent', lbView: 'rank', cmp: [ME, firstOther],
     cur: store.get('cur', 'EUR'),
-    disc: { src: 'played', unowned: true, multi: true, cheap: false },
+    disc: { src: 'played', unowned: true, single: false, modded: false, cheap: false },
+    profileId: null, profiles: {}, libQuery: '', libFilter: 'all', libShow: 60,
   };
-  let draft = null;
+  let draft = null, confirmUnlink = false;
   function mergeGames(map) {
     Object.entries(map || {}).forEach(([key, raw]) => {
       const id = +key;
@@ -66,7 +67,18 @@
     return { owners, missing, unknown, groupH, fits };
   }
 
-  const img = g => `https://cdn.cloudflare.steamstatic.com/steam/apps/${g.id}/header.jpg`;
+  const img = g => g.img || `https://cdn.cloudflare.steamstatic.com/steam/apps/${g.id}/header.jpg`;
+  // Newer Steam games keep art under hashed URLs; try the common alternatives before giving up
+  window.bgImgFail = el => {
+    const id = el.dataset.id, t = +(el.dataset.t || 0);
+    const alts = [
+      `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/header.jpg`,
+      `https://cdn.cloudflare.steamstatic.com/steam/apps/${id}/capsule_616x353.jpg`,
+      `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_616x353.jpg`,
+    ].filter(u => u !== el.src);
+    if (t < alts.length) { el.dataset.t = t + 1; el.src = alts[t]; }
+    else el.parentNode.classList.add('noimg');
+  };
   const storeUrl = g => `https://store.steampowered.com/app/${g.id}/`;
   const ggUrl = g => `https://gg.deals/steam/app/${g.id}/`;
   const money = v => SYM[state.cur] + v.toFixed(2);
@@ -92,8 +104,21 @@
     if (c.avatar) return `<img class="av ${cls}" src="${esc(c.avatar)}" alt="" title="${esc(c.name)}" style="background:${c.color}" onerror="this.removeAttribute('src')">`;
     return `<span class="av ${cls}" style="background:${c.color}" title="${esc(c.name)}">${esc(c.name[0])}</span>`;
   }
-  const art = (g, details = false) => `<div class="art ${details ? 'clickable' : ''}" ${details ? `data-details="${g.id}"` : ''}><img src="${img(g)}" alt="" loading="lazy" onerror="this.parentNode.classList.add('noimg')"><span class="fallback">${esc(g.name)}</span>${details ? '<span class="play">▶</span>' : ''}</div>`;
-  const tags = g => `<div class="tags">${g.tags.map(t => `<span class="tag ${t === 'Co-op' ? 'coop' : t === 'PvP' ? 'pvp' : ''}">${esc(t)}</span>`).join('')}</div>`;
+  const art = (g, details = false) => `<div class="art ${details ? 'clickable' : ''}" ${details ? `data-details="${g.id}"` : ''}><img src="${img(g)}" alt="" loading="lazy" data-id="${g.id}" onerror="bgImgFail(this)"><span class="fallback">${esc(g.name)}</span>${details ? '<span class="play">▶</span>' : ''}</div>`;
+  const tags = g => `<div class="tags">${g.modded ? '<span class="tag mod" title="Moddable (Steam Workshop / Nexus)">🔧 Modded</span>' : ''}${g.tags.map(t => `<span class="tag ${t === 'Co-op' ? 'coop' : t === 'PvP' ? 'pvp' : ''}">${esc(t)}</span>`).join('')}</div>`;
+  const RV = { 9: ['Overwhelmingly Positive', ':D', 'g2'], 8: ['Very Positive', ':)', 'g1'], 7: ['Positive', ':)', 'g1'], 6: ['Mostly Positive', ':)', 'g1'],
+    5: ['Mixed', ':|', 'mid'], 4: ['Mostly Negative', ':(', 'b1'], 3: ['Negative', ':(', 'b1'], 2: ['Very Negative', ':(', 'b1'], 1: ['Overwhelmingly Negative', '>:(', 'b2'] };
+  const compact = n => n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
+  function review(g) {
+    const r = g.review; if (!r || !RV[r.score]) return '';
+    const [label, face, cls] = RV[r.score];
+    return `<span class="rv ${cls}" title="Steam reviews: ${label} · ${r.pct}% of ${compact(r.count || 0)}">${face}</span>`;
+  }
+  const pitchedSet = () => new Set(state.pitches.map(p => +p.game));
+  const pitchBtn = (g, cls = 'btn sm ghost') => pitchedSet().has(+g.id)
+    ? `<button class="${cls} pitched" data-view="pitches" title="Already on the shortlist. Go vote!">Pitched ✓</button>`
+    : `<button class="${cls}" data-pitch="${g.id}">Pitch it</button>`;
+  const title = (g, tag = 'h4') => `<div class="ttl"><${tag}>${esc(g.name)}</${tag}>${review(g)}</div>`;
   const playersTxt = g => g.max ? `👥 up to ${g.max}` : (g.coop || g.pvp || g.multi) ? '👥 multiplayer' : g.known === false ? '👥 checking Steam…' : '👤 single-player';
   const needsHtml = s => `<div class="needs"><b>Needs:</b> ${s.missing.map(p => av(p, 'sm') + ' ' + esc(crewById[p].name)).join(' ')}</div>`;
   const unknownHtml = s => s.unknown.length ? `<div class="unknown">? ${esc(names(s.unknown))}: Steam private / not linked</div>` : '';
@@ -159,6 +184,17 @@
     n.hidden = false;
   }
 
+  function renderTheme() {
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    $('#themeBtn').textContent = dark ? '☀️' : '🌙';
+    $('#themeBtn').title = dark ? 'Switch to light mode' : 'Switch to dark mode';
+  }
+  function toggleTheme() {
+    const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('bg:theme', next); } catch {}
+    renderTheme();
+  }
   function renderCur() {
     $('#cur').innerHTML = Object.entries(SYM).map(([k, s]) => `<button class="${state.cur === k ? 'on' : ''}" data-cur="${k}" title="${k}">${s}</button>`).join('');
   }
@@ -216,16 +252,23 @@
     const g = gameById[id]; if (!g) return;
     const s = status(g);
     $('#modal').innerHTML = `<div class="sheet wide" role="dialog" aria-label="${esc(g.name)}">${mediaHtml(g)}<div class="in">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px"><h2 style="font-size:30px">${esc(g.name)}</h2><button class="linkbtn" data-close>Close ✕</button></div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px"><div class="ttl"><h2 style="font-size:30px">${esc(g.name)}</h2>${review(g)}</div><button class="linkbtn" data-close>Close ✕</button></div>
       <div class="tagrow">${tags(g)}<span class="tags" data-stags></span></div>
       <p class="desc" data-desc>${esc(g.desc || 'Loading…')}</p>
       <div class="meta"><span>${playersTxt(g)}</span><span>${ownCount(g) ? `${ownCount(g)} of the crew own it` : 'Nobody in the crew owns it'}</span></div>
       ${s.owners.length ? `<div><span class="stack">${s.owners.map(p => av(p, 'sm')).join('')}</span></div>` : ''}
       ${priceBlock(g)}
-      <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap"><a class="btn ghost" href="${storeUrl(g)}" target="_blank" rel="noopener">Steam page ↗</a><button class="btn blurple" data-pitch="${g.id}">Pitch it</button></div>
+      ${g.review && RV[g.review.score] ? `<p class="hint" style="margin:0">Steam reviews: <b>${RV[g.review.score][0]}</b> (${g.review.pct}% of ${compact(g.review.count || 0)})</p>` : ''}
+      <div style="display:flex;gap:10px;justify-content:flex-end;align-items:center;flex-wrap:wrap">${modLinks(g)}<a class="btn ghost" href="${storeUrl(g)}" target="_blank" rel="noopener">Steam page ↗</a>${pitchBtn(g, 'btn blurple')}</div>
     </div></div>`;
     $('#modal').hidden = false;
     hydrate(g, $('#modal .sheet'));
+  }
+
+  function modLinks(g) {
+    if (!g.modded) return '';
+    const nexus = `https://www.google.com/search?q=${encodeURIComponent(g.name + ' site:nexusmods.com')}`;
+    return `<span class="modlinks">🔧 ${g.workshop ? `<a href="https://steamcommunity.com/app/${g.id}/workshop/" target="_blank" rel="noopener">Workshop</a> · ` : ''}<a href="${nexus}" target="_blank" rel="noopener">Nexus</a></span>`;
   }
 
   /* ---------- tonight ---------- */
@@ -233,12 +276,13 @@
     const ppl = people(), v = $('#view');
     if (!ppl.length) { v.innerHTML = `<div class="empty">Tick who's on tonight to see what you can play.</div>`; return; }
     const f = state.tf;
-    const pass = (g, s) => (!f.multi || isMulti(g)) && (!f.coop || g.coop) && (!f.pvp || g.pvp) && (!f.fits || s.fits) && (!f.cheap || cheap(g));
+    const pass = (g, s) => (f.single ? knownSingle(g) : isMulti(g)) && (!f.coop || g.coop) && (!f.pvp || g.pvp) && (!f.modded || g.modded) && (!f.fits || s.fits) && (!f.cheap || cheap(g));
     const ready = [], almost = [], free = [];
     GAMES.forEach(g => {
       if (g.disc) return;
       const s = status(g, ppl); if (!pass(g, s)) return;
       const item = { g, s };
+      if (f.single) { if (s.owners.length) ready.push(item); return; }
       if (g.f2p) { if (s.owners.length) free.push(item); }
       else if (!s.missing.length) { if (s.owners.length || !LIVE) ready.push(item); }
       else if (s.missing.length <= 2 && s.owners.length) almost.push(item);
@@ -248,13 +292,14 @@
     free.sort((a, b) => b.s.owners.length - a.s.owners.length || b.s.groupH - a.s.groupH);
     const cap = list => list.slice(0, 48);
 
-    const fl = [['multi', 'Multiplayer only'], ['coop', 'Co-op'], ['pvp', 'PvP'], ['fits', ppl.length > 1 ? `Fits all ${ppl.length} of us` : 'Fits the group'], ['cheap', `Under ${SYM[state.cur]}20`]];
+    const fl = [['coop', 'Co-op'], ['pvp', 'PvP'], ['modded', '🔧 Modded'], ['fits', ppl.length > 1 ? `Fits all ${ppl.length} of us` : 'Fits the group'], ['cheap', `Under ${SYM[state.cur]}20`], ['single', 'Single-player only']];
     const pending = LIVE && D.pendingInfo ? `<p class="hint" style="margin:0 0 12px">⏳ Still fetching Steam info (co-op/PvP, prices) for ${D.pendingInfo} games. Refresh in a minute.</p>` : '';
     v.innerHTML = pending +
       `<div class="filters">${fl.map(([k, l]) => `<button class="toggle ${f[k] ? 'on' : ''}" data-tf="${k}">${l}</button>`).join('')}</div>` +
+      (f.single ? section('Single-player', cap(ready), ready.length, 'Owned by someone ticked above. For solo nights.', 'ready') :
       section('Everyone owns', cap(ready), ready.length, 'Ready to launch right now.', 'ready') +
       section('Almost', cap(almost), almost.length, 'Only 1 or 2 people need to buy it.', 'almost') +
-      section('Free to play', cap(free), free.length, 'Nobody has to spend a cent.', 'free');
+      section('Free to play', cap(free), free.length, 'Nobody has to spend a cent.', 'free'));
   }
   function section(title, items, total, sub, kind) {
     return `<div class="section-head"><h2>${title}</h2><span class="count">${total}</span><p>${sub}</p></div>` +
@@ -262,13 +307,13 @@
   }
   function card(g, s, kind) {
     return `<article class="gcard ${s.fits ? '' : 'dim'}">${art(g, true)}
-      <div class="body"><h4>${esc(g.name)}</h4>${tags(g)}
+      <div class="body">${title(g)}${tags(g)}
         <div class="meta"><span>${playersTxt(g)}${s.fits ? '' : ' · too many of you'}</span><span>${s.groupH ? fmt(s.groupH) + 'h together' : ''}</span></div>
         ${kind === 'almost' ? needsHtml(s) + priceBlock(g) : ''}
         ${s.owners.length ? `<div class="meta"><span class="stack">${s.owners.slice(0, 10).map(p => av(p, 'sm')).join('')}</span><span>${kind === 'free' ? s.owners.length + ' have it' : ''}</span></div>` : ''}
         ${unknownHtml(s)}
       </div>
-      <div class="actions"><button class="btn sm ghost" data-pitch="${g.id}">Pitch it</button><a href="${storeUrl(g)}" target="_blank" rel="noopener">Steam ↗</a></div>
+      <div class="actions">${pitchBtn(g)}<a href="${storeUrl(g)}" target="_blank" rel="noopener">Steam ↗</a></div>
     </article>`;
   }
 
@@ -277,7 +322,8 @@
     const ppl = people(), o = state.sh;
     return GAMES.filter(g => {
       if (state.hidden.has(g.id)) return false;
-      if (knownSingle(g)) return false;
+      if (o.single ? !knownSingle(g) : knownSingle(g)) return false;
+      if (o.modded && !g.modded) return false;
       const s = status(g, ppl);
       const owned = s.owners.length > 0;
       if (o.pool === 'all' && (s.missing.length || !(owned || (g.f2p && !g.disc)))) return false;
@@ -292,7 +338,7 @@
   function renderShuffle() {
     const p = pool(), o = state.sh, g = state.current && gameById[state.current];
     const pools = [['all', 'Everyone owns'], ['one', 'Missing ≤1'], ['any', 'Anything']];
-    const locks = [['fits', 'Fits everyone on'], ['coop', 'Co-op only'], ['pvp', 'PvP only'], ['free', 'Free only']];
+    const locks = [['fits', 'Fits everyone on'], ['coop', 'Co-op only'], ['pvp', 'PvP only'], ['free', 'Free only'], ['modded', '🔧 Modded only'], ['single', 'Single-player only']];
     $('#view').innerHTML = `<div class="shuffle"><div>
       ${g ? bigCard(g) : `<div class="bigcard"><div class="art noimg"><span class="fallback" style="font-size:40px">🎲</span></div>
         <div class="body"><h2>Can't decide?</h2><p class="desc">Roll a random game from what tonight's crew can play. Lock filters on the right and keep rolling until something sticks. Each roll shows the trailer and what the game's about.</p></div></div>`}
@@ -315,7 +361,7 @@
   function bigCard(g) {
     const s = status(g);
     return `<div class="bigcard" id="bigcard">${mediaHtml(g)}<div class="body">
-      <h2 id="bigTitle">${esc(g.name)}</h2>
+      <div class="ttl"><h2 id="bigTitle">${esc(g.name)}</h2>${review(g)}</div>
       <div class="tagrow" style="margin-top:12px">${tags(g)}<span class="tags" data-stags></span></div>
       <p class="desc" data-desc>${esc(g.desc || '')}</p>
       <div class="big-row">
@@ -326,7 +372,7 @@
       <div style="margin-top:14px">${priceBlock(g)}</div>
       ${s.missing.length ? `<div style="margin-top:10px">${needsHtml(s)}</div>` : ''}
       ${s.unknown.length ? `<div style="margin-top:8px">${unknownHtml(s)}</div>` : ''}
-      <div style="margin-top:12px;font-size:14px"><a href="${storeUrl(g)}" target="_blank" rel="noopener">View on Steam ↗</a> · <button class="linkbtn" data-pitch="${g.id}">Pitch it</button></div>
+      <div style="margin-top:12px;font-size:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">${pitchBtn(g)}<a href="${storeUrl(g)}" target="_blank" rel="noopener">View on Steam ↗</a>${modLinks(g)}</div>
     </div></div>`;
   }
   function roll() {
@@ -379,11 +425,12 @@
     const all = chartList(d.src);
     const list = all.filter(({ g }) => {
       if (d.unowned && ownCount(g) > 0) return false;
-      if (d.multi && !isMulti(g)) return false;
+      if (d.single ? !knownSingle(g) : !isMulti(g)) return false;
+      if (d.modded && !g.modded) return false;
       if (d.cheap && !cheap(g)) return false;
       return true;
     });
-    const fl = [['unowned', 'Nobody owns it yet'], ['multi', 'Multiplayer only'], ['cheap', `Under ${SYM[state.cur]}20`]];
+    const fl = [['unowned', 'Nobody owns it yet'], ['modded', '🔧 Modded'], ['cheap', `Under ${SYM[state.cur]}20`], ['single', 'Single-player only']];
     const when = state.chartsUpdated ? ` · updated ${ago(state.chartsUpdated)}` : '';
     $('#view').innerHTML = `
       <div class="section-head" style="margin-top:0"><h2>Discovery</h2><span class="count">${list.length}</span><p>Steam's live charts${LIVE ? when : ''}. Click a game for the trailer.</p></div>
@@ -399,12 +446,12 @@
     const d = state.disc, n = ownCount(g);
     const badge = d.src === 'sale' ? (g.sale ? `-${g.sale}%` : `#${rank}`) : `#${rank}`;
     return `<article class="gcard"><div style="position:relative">${art(g, true)}<span class="rank">${badge}</span></div>
-      <div class="body"><h4>${esc(g.name)}</h4>${tags(g)}
+      <div class="body">${title(g)}${tags(g)}
         <p class="desc sm">${esc((g.desc || '').slice(0, 160))}${(g.desc || '').length > 160 ? '…' : ''}</p>
         <div class="meta"><span>${value ? `🔥 ${fmtNum(value)} peak players` : playersTxt(g)}</span><span>${n ? n + ' of the crew own it' : 'Nobody owns it'}</span></div>
         ${priceBlock(g)}
       </div>
-      <div class="actions"><button class="btn sm ghost" data-pitch="${g.id}">Pitch it</button><button class="linkbtn" data-details="${g.id}">▶ Trailer &amp; details</button></div>
+      <div class="actions">${pitchBtn(g)}<button class="linkbtn" data-details="${g.id}">▶ Trailer &amp; details</button></div>
     </article>`;
   }
 
@@ -438,7 +485,7 @@
     const res = [...new Map([...remote, ...local].map(g => [g.id, g])).values()].slice(0, 10);
     if (!res.length && LIVE && state.searchQ !== q) return `<div class="empty">Searching Steam…</div>`;
     if (!res.length) return `<div class="empty">No matches for “${esc(state.query)}”.</div>`;
-    return res.map(g => `<div class="result">${art(g, true)}<div><b>${esc(g.name)}</b><small>${ownCount(g)} of the crew own it</small>${priceBlock(g)}</div><button class="btn sm" data-pitch="${g.id}">Pitch it</button></div>`).join('');
+    return res.map(g => `<div class="result">${art(g, true)}<div><b>${esc(g.name)}</b><small>${ownCount(g)} of the crew own it</small>${priceBlock(g)}</div>${pitchBtn(g, 'btn sm')}</div>`).join('');
   }
   function pitchHtml(p) {
     const g = gameById[p.game], mine = p.votes.includes(ME);
@@ -481,6 +528,22 @@
     const head = `<div class="lb-head"><h2>Leaderboard</h2><div class="seg" style="width:240px">${views.map(([k, l]) => `<button class="${state.lbView === k ? 'on' : ''}" data-lbv="${k}">${l}</button>`).join('')}</div></div>`;
     $('#view').innerHTML = head + (state.lbView === 'compare' ? compareHtml() : rankingsHtml());
   }
+  const TAGLINES = {
+    recent: ['go outside', 'touch grass', 'your chair has filed a complaint', 'the sun misses you', 'hydrate. please.', 'have you seen daylight this week?',
+      'your mam is worried', 'certified basement goblin', 'shower speedrun any%', 'sleep is not a debuff', 'blink twice if you need help'],
+    all: ['no-life speedrun any%', 'Gabe owes you a pension', 'hours played > hours slept', 'living legend / cautionary tale', 'retire already',
+      'the grind never stops (it should)', 'certified chair fossil'],
+    owned: ['Steam sale victim', 'the backlog is load-bearing', "Gabe's favourite customer", 'buys games, plays none', 'collector, not a player',
+      'wallet left the chat', '"I\'ll play it eventually"'],
+  };
+  function tagline(c, mode) {
+    // Same line for the whole week, so it doesn't change on every refresh
+    const week = Math.floor(Date.now() / (7 * 86400e3));
+    const key = `${c.id}|${mode}|${week}`;
+    let h = 0; for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    const list = TAGLINES[mode];
+    return list[h % list.length];
+  }
   function rankingsHtml() {
     const pub = CREW.filter(c => !c.private), mode = state.lb;
     const rows = pub.map(c => {
@@ -503,8 +566,9 @@
     return `<div class="lb-layout"><div>
         <div class="filters" style="margin-bottom:16px">${modes.map(([k, l]) => `<button class="toggle ${mode === k ? 'on' : ''}" data-lb="${k}">${l}</button>`).join('')}</div>
         ${rows.map((r, i) => `<div class="lbrow ${i === 0 ? 'gold' : ''}">
+          ${i === 0 && r.val > 0 ? `<span class="tagline">${esc(tagline(r.c, mode))}</span>` : ''}
           <div class="rank-b r${i < 3 ? i + 1 : 0}">${i + 1}</div>${av(r.c.id, 'lg')}
-          <div class="who"><b>${esc(r.c.name)}</b>${mode !== 'owned' && r.top && r.topV ? `<div class="fav">Mostly ${esc(gname(r.top))} · ${fmt(r.topV)}h</div>` : ''}
+          <div class="who"><button class="linkbtn name" data-view="profile" data-profile="${r.c.id}">${esc(r.c.name)}</button>${mode !== 'owned' && r.top && r.topV ? `<div class="fav">Mostly ${esc(gname(r.top))} · ${fmt(r.topV)}h</div>` : ''}
             <div class="bar"><i style="width:${(r.val / max) * 100}%"></i></div></div>
           <div class="val">${fmt(r.val)}<small>${unit}</small></div></div>`).join('')}
         <p class="hint">${priv ? esc(priv) + ' not shown (Steam private or not linked). ' : ''}Nightly snapshots will add weekly and monthly boards.</p>
@@ -536,9 +600,9 @@
     const onlyList = (list, who) => list.length ? `<ul class="together">${list.map(x => `<li><button class="linkbtn" data-details="${x.g.id}">${esc(x.g.name)}</button><span>${fmt(x.h)}h</span></li>`).join('')}</ul>` : `<p class="hint">Nothing ${esc(who)} has that the other doesn't.</p>`;
     return `<div class="cmp">
       <div class="cmp-head">
-        <div class="cmp-side">${av(a, 'xl')}${sel(0, a)}</div>
+        <div class="cmp-side"><button class="linkbtn" data-view="profile" data-profile="${a}" title="View profile">${av(a, 'xl')}</button>${sel(0, a)}</div>
         <div class="vs">VS</div>
-        <div class="cmp-side right">${sel(1, b)}${av(b, 'xl')}</div>
+        <div class="cmp-side right">${sel(1, b)}<button class="linkbtn" data-view="profile" data-profile="${b}" title="View profile">${av(b, 'xl')}</button></div>
       </div>
       <div class="cmp-stats">${stats.map(([l, x, y]) => { const t = (x + y) || 1; return `<div class="cmp-stat">
         <b class="${x > y ? 'win' : ''}">${fmt(x)}</b>
@@ -557,23 +621,195 @@
       </div></div>`;
   }
 
+  /* ---------- profile ---------- */
+  function mockProfile(id) {
+    // Fake-data mode: build a profile from the sample libraries
+    const c = crewById[id], lib = LIB[id] || {};
+    const library = Object.entries(lib).map(([appid, x]) => {
+      const g = gameById[appid] || { name: 'App ' + appid, tags: [] };
+      return { appid: +appid, name: g.name, minutes: Math.round(x.h * 60), minutes_2w: Math.round(x.h2w * 60), tags: g.tags, multi: isMulti(g), free: g.f2p,
+        modded: g.modded, img: g.img, price: { ie: g.f2p ? 0 : Math.round(((g.prices || {}).EUR || {}).base * 100), gb: g.f2p ? 0 : Math.round(((g.prices || {}).GBP || {}).base * 100), us: g.f2p ? 0 : Math.round(((g.prices || {}).USD || {}).base * 100) },
+        hidden: id === ME ? store.get('hidden', []).includes(+appid) : undefined };
+    }).sort((a, b) => b.minutes - a.minutes);
+    const total = library.reduce((a, x) => a + x.minutes, 0);
+    const snapshots = Array.from({ length: 30 }, (_, i) => ({ day: new Date(Date.now() - (29 - i) * 864e5).toISOString().slice(0, 10), minutes: Math.round(total - (29 - i) * (60 + ((i * 37) % 140))) }));
+    const top = library.filter(x => x.minutes > 0).slice(0, 6);
+    return {
+      self: id === ME, user: { id, name: c.name, avatar: c.avatar, steam_linked: !c.unlinked, steam_private: !!c.private, last_sync: Date.now() - 3 * 3600e3 },
+      steam_id: id === ME ? '76561198000000001' : undefined, library: c.private ? [] : library, snapshots: c.private ? [] : snapshots,
+      extras: c.private ? null : {
+        summary: { persona: c.name.toLowerCase() + '_gg', url: 'https://steamcommunity.com/', created: Date.UTC(2014 + (id.length % 5), 3, 1), country: 'IE' },
+        level: 12 + id.length * 5,
+        achievements: top.map((x, i) => ({ appid: x.appid, achieved: 10 + i * 7, total: 40 + i * 9 })),
+        stats: top[0] ? [{ appid: top[0].appid, stats: [{ name: 'total_kills', value: 18342 }, { name: 'total_wins', value: 912 }, { name: 'total_time_played', value: top[0].minutes * 60 }, { name: 'total_mvps', value: 640 }] }] : [],
+      },
+    };
+  }
+  async function loadProfile(id) {
+    if (!LIVE) { state.profiles[id] = mockProfile(id); return; }
+    try { state.profiles[id] = await API.call(`/api/profile/${id}`); }
+    catch { state.profiles[id] = { error: true }; }
+  }
+  const hrsOf = m => Math.round(m / 6) / 10;
+  const prettyStat = n => n.replace(/^total_/, '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  const statVal = (n, v) => /time/i.test(n) ? fmt(Math.round(v / 360) / 10) + 'h' : fmt(v);
+  function renderProfile() {
+    const id = state.profileId || ME, v = $('#view');
+    if (!crewById[id]) { v.innerHTML = '<div class="empty">That person isn’t in the crew.</div>'; return; }
+    const P = state.profiles[id];
+    if (!P) { v.innerHTML = '<div class="empty">Loading profile…</div>'; loadProfile(id).then(() => { if (state.view === 'profile' && state.profileId === id) render(); }); return; }
+    if (P.error) { v.innerHTML = '<div class="empty">Couldn’t load that profile. Try again in a minute.</div>'; return; }
+    const c = crewById[id], x = P.extras || {}, sm = x.summary || {}, self = P.self;
+    const visible = P.library.filter(g => !g.hidden);
+    const total = visible.reduce((a, g) => a + g.minutes, 0), twoW = visible.reduce((a, g) => a + g.minutes_2w, 0);
+    const never = visible.filter(g => !g.minutes).length;
+    const cc = CC[state.cur];
+    const worth = visible.reduce((a, g) => a + (g.free ? 0 : (g.price && g.price[cc]) || 0), 0) / 100;
+    const multiMin = visible.filter(g => g.multi).reduce((a, g) => a + g.minutes, 0);
+    const top = visible.filter(g => g.minutes > 0).slice(0, 10), maxTop = Math.max(1, ...top.map(g => g.minutes));
+    const tagH = {};
+    visible.forEach(g => (g.tags || []).slice(0, 3).forEach(t => { tagH[t] = (tagH[t] || 0) + g.minutes; }));
+    const tagList = Object.entries(tagH).sort((a, b) => b[1] - a[1]).slice(0, 8), maxTag = Math.max(1, ...tagList.map(t => t[1]));
+    const ach = Object.fromEntries((x.achievements || []).map(a => [a.appid, a]));
+    const gname = appid => (gameById[appid] || P.library.find(g => g.appid === +appid) || {}).name || 'App ' + appid;
+    // daily hours from snapshots
+    const sn = P.snapshots || [];
+    const daily = sn.slice(1).map((d, i) => ({ day: d.day, h: Math.max(0, (d.minutes - sn[i].minutes) / 60) })).slice(-30);
+    const maxD = Math.max(1, ...daily.map(d => d.h));
+    const since = sm.created ? new Date(sm.created).getFullYear() : null;
+
+    const tiles = [
+      ['Total hours', fmt(hrsOf(total)) + 'h', `${fmt(Math.round(total / 60 / 24))} days of your life`],
+      ['Last 2 weeks', fmt(hrsOf(twoW)) + 'h', twoW ? `~${fmt(Math.round(twoW / 14 / 6) / 10)}h a day` : 'touching grass, apparently'],
+      ['Games owned', fmt(visible.length), self && P.library.length !== visible.length ? `${P.library.length - visible.length} hidden` : ''],
+      ['Never played', fmt(never), visible.length ? `${Math.round(never / visible.length * 100)}% of the library` : ''],
+      ['Library value', money(worth), 'at full Steam price'],
+      ['Multiplayer share', total ? Math.round(multiMin / total * 100) + '%' : '—', 'of hours in multiplayer games'],
+    ];
+
+    v.innerHTML = `<div class="pf">
+      <div class="pf-head">
+        ${av(id, 'xxl')}
+        <div class="pf-id">
+          <h1>${esc(c.name)}</h1>
+          <div class="pf-sub">
+            ${sm.persona ? `<span>Steam: <b>${esc(sm.persona)}</b></span>` : ''}
+            ${x.level != null ? `<span class="lvl">Lv ${x.level}</span>` : ''}
+            ${since ? `<span>On Steam since ${since}</span>` : ''}
+            ${P.user.last_sync ? `<span>Synced ${ago(P.user.last_sync)}</span>` : ''}
+          </div>
+          <div class="pf-links">${sm.url ? `<a href="${esc(sm.url)}" target="_blank" rel="noopener">Steam profile ↗</a>` : ''}${!self && id !== ME ? `<button class="linkbtn" data-cmpwith="${id}">Compare with me</button>` : ''}</div>
+        </div>
+      </div>
+
+      ${self ? steamPanel(P) : ''}
+      ${!P.user.steam_linked ? `<div class="empty">${self ? 'Link your Steam account above to see your stats.' : esc(c.name) + ' hasn’t linked Steam yet.'}</div>` :
+        P.user.steam_private ? `<div class="empty">${self ? 'Your Steam game details are private, so there’s nothing to show yet.' : esc(c.name) + '’s Steam library is private.'}</div>` : `
+      <div class="tiles">${tiles.map(([l, val, sub]) => `<div class="tile"><span class="label">${l}</span><b>${val}</b><small>${sub}</small></div>`).join('')}</div>
+
+      <div class="pf-grid">
+        <div class="panel"><h3>Most played</h3>
+          ${top.length ? top.map(g => { const a = ach[g.appid]; return `<div class="pbar">
+            <button class="linkbtn n" data-details="${g.appid}">${esc(g.name || gname(g.appid))}</button>
+            <div class="track"><i style="width:${g.minutes / maxTop * 100}%"></i></div>
+            <span class="v">${fmt(hrsOf(g.minutes))}h</span>
+            ${a ? `<span class="ach" title="${a.achieved}/${a.total} achievements">🏆 ${Math.round(a.achieved / a.total * 100)}%</span>` : '<span class="ach none"></span>'}
+          </div>`; }).join('') : '<p class="hint">No playtime yet.</p>'}
+        </div>
+        <div class="panel"><h3>Hours by tag</h3>
+          ${tagList.length ? tagList.map(([t, m]) => `<div class="pbar tagbar"><span class="n">${esc(t)}</span><div class="track"><i style="width:${m / maxTag * 100}%"></i></div><span class="v">${fmt(hrsOf(m))}h</span></div>`).join('') : '<p class="hint">Tags fill in once Steam info has loaded.</p>'}
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:18px"><h3>Hours per day <span class="hint" style="font:400 13px Outfit">· last 30 days</span></h3>
+        ${daily.length >= 2 ? `<div class="spark">${daily.map(d => `<i title="${d.day}: ${fmt(Math.round(d.h * 10) / 10)}h" style="height:${Math.max(2, d.h / maxD * 100)}%"></i>`).join('')}</div>
+          <div class="spark-x"><span>${daily[0].day}</span><span>${daily[daily.length - 1].day}</span></div>`
+        : '<p class="hint">This builds up from nightly snapshots. Check back in a few days.</p>'}
+      </div>
+
+      ${(x.stats || []).length || (x.achievements || []).length ? `<div class="pf-grid" style="margin-top:18px">
+        ${(x.stats || []).map(st => `<div class="panel"><h3>${esc(gname(st.appid))} <span class="hint" style="font:400 13px Outfit">· in-game stats</span></h3>
+          <div class="stats">${st.stats.map(k => `<div><span class="label">${esc(prettyStat(k.name))}</span><b>${statVal(k.name, k.value)}</b></div>`).join('')}</div></div>`).join('')}
+        ${(x.achievements || []).length ? `<div class="panel"><h3>Achievements</h3>${x.achievements.map(a => `<div class="pbar"><span class="n">${esc(gname(a.appid))}</span>
+          <div class="track gold"><i style="width:${a.achieved / a.total * 100}%"></i></div><span class="v">${a.achieved}/${a.total}</span></div>`).join('')}</div>` : ''}
+      </div>` : ''}
+
+      ${libraryPanel(P)}`}
+    </div>`;
+  }
+  function steamPanel(P) {
+    const u = P.user;
+    const status = !u.steam_linked ? 'Not linked yet.' : u.steam_private ? '⚠️ Linked, but your Steam <b>Game details</b> are private.' : `Linked · ${fmt(u.game_count || P.library.length)} games.`;
+    return `<div class="panel steam-panel"><h3>Your Steam account</h3>
+      <p class="hint" style="margin:0 0 10px">${status}${P.steam_id ? ` <a href="https://steamcommunity.com/profiles/${esc(P.steam_id)}" target="_blank" rel="noopener">View ↗</a>` : ''}
+        ${u.steam_private ? ' Set it to Public in <a href="https://steamcommunity.com/my/edit/settings" target="_blank" rel="noopener">Steam privacy settings</a>, then resync.' : ''}</p>
+      <div class="notice-form" style="max-width:none">
+        <input id="steamInput" placeholder="${u.steam_linked ? 'Paste a different Steam profile link to switch accounts' : 'steamcommunity.com/id/yourname'}" autocomplete="off">
+        <button class="btn" id="steamLinkBtn">${u.steam_linked ? 'Change' : 'Link Steam'}</button>
+        ${u.steam_linked ? '<button class="btn ghost" id="resyncBtn">Resync</button><button class="btn ghost" id="unlinkBtn">Unlink</button>' : ''}
+      </div></div>`;
+  }
+  function libraryPanel(P) {
+    const q = state.libQuery.trim().toLowerCase(), f = state.libFilter;
+    const list = P.library.filter(g => (!q || (g.name || '').toLowerCase().includes(q)) &&
+      (f === 'all' || (f === 'hidden' && g.hidden) || (f === 'never' && !g.minutes) || (f === 'multi' && g.multi)));
+    const filters = [['all', 'All'], ['multi', 'Multiplayer'], ['never', 'Never played'], ...(P.self ? [['hidden', 'Hidden']] : [])];
+    return `<div class="panel" style="margin-top:18px"><div class="lib-head"><h3 style="margin:0">${P.self ? 'Your library' : 'Library'} <span class="count">${list.length}</span></h3>
+        <input id="libQ" placeholder="Search…" value="${esc(state.libQuery)}" autocomplete="off">
+        <div class="filters">${filters.map(([k, l]) => `<button class="toggle ${f === k ? 'on' : ''}" data-libf="${k}">${l}</button>`).join('')}</div></div>
+      ${P.self ? '<p class="hint" style="margin:6px 0 10px">Hidden games don’t count as owned on the site and are left off the leaderboards. Only you can see them here.</p>' : ''}
+      <div class="lib">${list.slice(0, state.libShow).map(g => `<div class="lib-row ${g.hidden ? 'is-hidden' : ''}">
+          <button class="linkbtn n" data-details="${g.appid}">${esc(g.name || 'App ' + g.appid)}</button>
+          ${g.modded ? '<span class="tag mod">🔧</span>' : '<span></span>'}
+          <span class="v">${g.minutes ? fmt(hrsOf(g.minutes)) + 'h' : 'never played'}</span>
+          ${P.self ? `<button class="eye" data-hide="${g.appid}" data-on="${g.hidden ? 0 : 1}" title="${g.hidden ? 'Show on the site' : 'Hide from the site'}">${g.hidden ? '🙈 Hidden' : '👁 Shown'}</button>` : ''}
+        </div>`).join('') || '<p class="hint">Nothing matches.</p>'}</div>
+      ${list.length > state.libShow ? `<button class="btn ghost sm" data-libmore style="margin-top:12px">Show more (${list.length - state.libShow} left)</button>` : ''}
+    </div>`;
+  }
+  async function toggleHidden(appid, hide) {
+    const P = state.profiles[ME]; if (!P) return;
+    const g = P.library.find(x => x.appid === appid); if (!g) return;
+    g.hidden = hide;
+    // keep group views in sync straight away
+    LIB[ME] = LIB[ME] || {};
+    if (hide) delete LIB[ME][appid];
+    else LIB[ME][appid] = { h: hrsOf(g.minutes), h2w: hrsOf(g.minutes_2w) };
+    render();
+    if (!LIVE) { const h = new Set(store.get('hidden', [])); hide ? h.add(appid) : h.delete(appid); store.set('hidden', [...h]); return; }
+    try { await API.call('/api/profile/hidden', { method: 'POST', body: JSON.stringify({ appid, hidden: hide }) }); }
+    catch { toast('Could not save that. Try again.'); }
+  }
+
   /* ---------- router ---------- */
   function render() {
     const v = state.view;
     $$('.tabs a').forEach(a => a.classList.toggle('active', a.dataset.view === v));
     $('#crewPanel').hidden = !(v === 'tonight' || v === 'shuffle');
-    ({ tonight: renderTonight, shuffle: renderShuffle, discovery: renderDiscovery, pitches: renderPitches, leaderboard: renderLb })[v]();
+    ({ tonight: renderTonight, shuffle: renderShuffle, discovery: renderDiscovery, pitches: renderPitches, leaderboard: renderLb, profile: renderProfile })[v]();
     renderCur();
   }
-  function route() {
+  // The address bar always stays on the bare site; the current tab lives in sessionStorage
+  function go(view, opts = {}) {
+    state.view = VIEWS.includes(view) ? view : 'tonight';
+    if (state.view === 'profile') state.profileId = opts.profile || state.profileId || ME;
+    try { sessionStorage.setItem('bg:view', JSON.stringify({ v: state.view, p: state.profileId })); } catch {}
+    closeModal(); render(); window.scrollTo({ top: 0 });
+  }
+  function startView() {
     const h = location.hash.slice(1);
-    state.view = VIEWS.includes(h) ? h : 'tonight';
-    render();
+    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+    if (VIEWS.includes(h)) return go(h);
+    try { const s = JSON.parse(sessionStorage.getItem('bg:view') || 'null'); if (s) return go(s.v, { profile: s.p }); } catch {}
+    go('tonight');
   }
 
   /* ---------- events ---------- */
   document.addEventListener('click', async e => {
     if (e.target.id === 'modal') return closeModal();
+    const nav = e.target.closest('[data-view]');
+    if (nav && !e.ctrlKey && !e.metaKey) { e.preventDefault(); go(nav.dataset.view, { profile: nav.dataset.profile }); return; }
+    if (e.target.closest('#themeBtn')) { toggleTheme(); return; }
     const det = e.target.closest('[data-details]');
     if (det && !e.target.closest('[data-pitch]')) { openDetails(+det.dataset.details); return; }
     const t = e.target.closest('button,[data-close]');
@@ -656,6 +892,7 @@
       return;
     }
     if (t.id === 'steamLinkBtn') {
+      if (!LIVE) { toast('Steam linking works once the backend is connected.'); return; }
       const input = $('#steamInput').value.trim();
       if (!input) return toast('Paste your Steam profile link first.');
       t.disabled = true; t.textContent = 'Linking…';
@@ -663,7 +900,18 @@
       catch (err) { toast(esc((err.body && err.body.message) || 'Could not link that Steam account.')); t.disabled = false; t.textContent = 'Link Steam'; }
       return;
     }
+    if (d.hide) { toggleHidden(+d.hide, d.on === '1'); return; }
+    if (d.libf) { state.libFilter = d.libf; state.libShow = 60; render(); return; }
+    if ('libmore' in d) { state.libShow += 120; render(); return; }
+    if (d.cmpwith) { state.cmp = [ME, d.cmpwith]; state.lbView = 'compare'; go('leaderboard'); return; }
+    if (t.id === 'unlinkBtn') {
+      if (!confirmUnlink) { confirmUnlink = true; t.textContent = 'Tap again to unlink'; setTimeout(() => { confirmUnlink = false; if (t.isConnected) t.textContent = 'Unlink'; }, 4000); return; }
+      if (!LIVE) { toast('Unlinking works once the backend is connected.'); return; }
+      try { await API.call('/api/steam/link', { method: 'DELETE' }); location.reload(); } catch { toast('Could not unlink. Try again.'); }
+      return;
+    }
     if (t.id === 'resyncBtn') {
+      if (!LIVE) { toast('Resync works once the backend is connected.'); return; }
       t.disabled = true; t.textContent = 'Syncing…';
       try { await API.call('/api/steam/sync', { method: 'POST' }); location.reload(); }
       catch (err) { toast('Sync failed. Try again in a minute.'); t.disabled = false; t.textContent = 'Resync'; }
@@ -690,6 +938,11 @@
         }, 350);
       }
     }
+    if (e.target.id === 'libQ') {
+      state.libQuery = e.target.value; state.libShow = 60;
+      const pos = e.target.selectionStart; render();
+      const el = $('#libQ'); if (el) { el.focus(); el.setSelectionRange(pos, pos); }
+    }
     if (e.target.id === 'note' && draft) { draft.note = e.target.value; $('#dpreview').innerHTML = discordPreview(); }
   });
   document.addEventListener('keydown', e => {
@@ -697,15 +950,17 @@
     const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
     if (e.code === 'Space' && state.view === 'shuffle' && !typing && $('#modal').hidden) { e.preventDefault(); roll(); }
   });
-  window.addEventListener('hashchange', route);
 
   /* ---------- init ---------- */
   if (LIVE) {
     $('.mockbar').textContent = 'BETA · KEYSHOP PRICES COMING SOON';
     const core = $('[data-crew=core]'); if (core) core.textContent = 'Just me';
   }
-  $('#me').innerHTML = `${av(ME)}<div>${esc(crewById[ME].name)}<small>${LIVE ? '<button class="linkbtn" data-act="logout">Log out</button>' : 'Discord login (mock)'}</small></div>`;
+  $('#me').innerHTML = `<button class="me-btn" data-view="profile" data-profile="${ME}" title="Your profile">${av(ME)}<span>${esc(crewById[ME].name)}<small>Your profile</small></span></button>${LIVE ? '<button class="linkbtn logout" data-act="logout" title="Log out">Log out</button>' : ''}`;
+  mergeGames(D.pitchGames);
+  if (LIVE && D.PITCHES) { state.pitches = D.PITCHES; state.pitchesLoaded = true; }
+  renderTheme();
   renderNotice();
   renderCrew();
-  route();
+  startView();
 })();
