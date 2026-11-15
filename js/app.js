@@ -303,11 +303,13 @@
   }
 
   function lastPlayedHtml(g) {
-    const owners = CREW.filter(c => LIB[c.id] && LIB[c.id][g.id]).map(c => ({ c, lp: LIB[c.id][g.id].lp || null, on: state.on.has(c.id) }))
-      .sort((a, b) => (b.on - a.on) || ((b.lp || 0) - (a.lp || 0))).slice(0, 8);
+    const owners = CREW.filter(c => LIB[c.id] && LIB[c.id][g.id]).map(c => ({ c, lp: LIB[c.id][g.id].lp || null, h: LIB[c.id][g.id].h || 0, on: state.on.has(c.id) }))
+      .sort((a, b) => (b.on - a.on) || ((b.lp || 0) - (a.lp || 0)) || (b.h - a.h)).slice(0, 8);
     if (!owners.length) return '';
+    // No date but has playtime = played, date not synced yet (libraries synced before this feature)
+    const when = o => o.lp ? since(o.lp) : o.h ? `${fmt(o.h)}h played` : 'never';
     return `<div class="lp"><span class="label">Last played</span><div class="lp-list">${owners.map(o =>
-      `<span class="lp-item ${o.lp && Date.now() - o.lp < 7 * 864e5 ? 'fresh' : !o.lp ? 'never' : ''}">${av(o.c.id, 'sm')} ${esc(o.c.name)} <b>${since(o.lp)}</b></span>`).join('')}</div></div>`;
+      `<span class="lp-item ${o.lp && Date.now() - o.lp < 7 * 864e5 ? 'fresh' : !o.lp && !o.h ? 'never' : ''}" ${!o.lp && o.h ? 'title="Last-played date arrives on their next Steam sync"' : ''}>${av(o.c.id, 'sm')} ${esc(o.c.name)} <b>${when(o)}</b></span>`).join('')}</div></div>`;
   }
   function updatedHtml(g) {
     const n = state.gameNews[g.id];
