@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Burrito Gang · Game Night</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Outfit:wght@400;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-inner">
+    <a class="brand" href="#tonight"><span id="burrito"></span><span>BURRITO GANG</span><small>game night</small></a>
+    <nav class="tabs">
+      <a href="#tonight" data-view="tonight">Tonight</a>
+      <a href="#shuffle" data-view="shuffle">Shuffle</a>
+      <a href="#pitches" data-view="pitches">Pitches</a>
+      <a href="#leaderboard" data-view="leaderboard">Leaderboard</a>
+    </nav>
+    <div class="me" id="me"></div>
+  </div>
+</header>
+<div class="mockbar">PROTOTYPE · FAKE DATA · STEAM &amp; DISCORD NOT CONNECTED YET</div>
+
+<main class="wrap">
+  <section class="crew-panel" id="crewPanel">
+    <div class="label">Who's on tonight?</div>
+    <div class="crew" id="crew"></div>
+    <div class="crew-actions">
+      <button class="linkbtn" data-crew="all">Everyone</button>
+      <button class="linkbtn" data-crew="core">Just the 3 of us</button>
+      <button class="linkbtn" data-crew="none">Clear</button>
+    </div>
+  </section>
+  <section id="view"></section>
+</main>
+
+<div class="awning"></div>
+<footer>burrito gang · gaymers.burritogang.com</footer>
+
+<div id="toast" role="status"></div>
+<div id="modal" hidden></div>
+
+<script src="js/data.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
