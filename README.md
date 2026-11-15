@@ -24,6 +24,8 @@ Private Steam profiles (e.g. Lukas) show as *unknown*, so they never block a gam
 ```
 index.html          page shell
 CNAME               tells GitHub Pages to serve on gaymers.burritogang.com
+og.png              link-preview image (Discord/WhatsApp embeds)
+favicon.svg/.png    browser tab icon
 css/style.css       styling (matches the burritogang.com look)
 js/config.js        ← the only file you edit: Worker URL + Discord invite
 js/data.js          fake sample data (also supplies the Discovery charts for now)
