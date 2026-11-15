@@ -32,14 +32,16 @@
     (g.tags || []).forEach(t => { if (tags.length < 4 && !tags.includes(t) && !/^(Co-op|Online Co-Op|PvP|Multiplayer)$/i.test(t)) tags.push(t); });
     const pr = cc => {
       const p = g.prices && g.prices[cc];
-      return p ? { base: p.initial / 100, steam: p.final / 100, key: null } : { base: 0, steam: 0, key: null };
+      const k = g.keys && g.keys[cc] && g.keys[cc].p != null ? +g.keys[cc].p : null;
+      return p ? { base: p.initial / 100, steam: p.final / 100, key: k } : { base: 0, steam: 0, key: k };
     };
+    const kurl = g.keys && (Object.values(g.keys).find(k => k && k.url) || {}).url;
     const ie = g.prices && g.prices.ie;
     return {
       id, name: g.name || `App ${id}`, f2p: !!g.is_free, price: ie ? ie.final / 100 : 0,
       coop: !!g.coop, pvp: !!g.pvp, multi: !!g.multi, known: !!g.meta_at, max: g.max_players || null, tags,
       sale: ie ? ie.discount || 0 : 0, desc: g.description || '',
-      img: g.img || null, review: g.review || null, modded: !!g.modded, workshop: !!g.workshop,
+      img: g.img || null, review: g.review || null, modded: !!g.modded, workshop: !!g.workshop, ggUrl: kurl || null,
       prices: { EUR: pr('ie'), GBP: pr('gb'), USD: pr('us') },
     };
   }

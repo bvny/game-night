@@ -81,10 +81,11 @@ This signs everyone's logins. Make it 40+ random characters, for example from a 
 | `SESSION_SECRET` | Secret | from step 4 |
 | `DISCORD_REQUIRED_ROLE_ID` | Text | *(optional)* |
 | `DISCORD_WEBHOOK_URL` | Secret | *(optional)* webhook for #game-night, see "Discord posting" below |
+| `GGDEALS_API_KEY` | Secret | *(optional)* keyshop prices, see "Keyshop prices" below |
 
 Click **Deploy** after adding them.
 
-**Trigger Events → Add → Cron Triggers**. Enter `17 * * * *`, which means every hour at :17.
+**Trigger Events → Add → Cron Triggers**. Enter `*/10 * * * *`, which means every 10 minutes. Keyshop prices refresh each run, and the heavier jobs (library resync, game info, charts) still run at most once an hour.
 This keeps everyone's libraries fresh and gradually fills in co-op/PvP info and prices for each game.
 
 ## Step 8: Check the Worker
@@ -130,6 +131,18 @@ Pitches and "👍 We're playing this" rolls get posted to a channel through a we
 The webhook URL is a password for posting in that channel. Only ever paste it into Cloudflare.
 - Pitches to specific people @mention them.
 - Pitches to everyone and shuffle rolls don't ping anyone.
+
+## Keyshop prices (GG.deals)
+
+1. Make a free account at **gg.deals**, then go to **Settings → API** and generate a key.
+2. In Cloudflare, go to **Worker → Settings → Variables and Secrets** and add `GGDEALS_API_KEY` as a **Secret**.
+3. Set the Cron Trigger to `*/10 * * * *` if it's still on the hourly one.
+
+GG.deals allows 100 prices a minute and 1,000 an hour, so the site fetches 100 games per run. Prices fill in over the first few hours, with pitched and multiplayer games first, then refresh daily.
+
+## Naming the cats (optional)
+
+Add a line to `js/config.js`, e.g. `CAT_NAMES: ['Grumpy one', 'Fluffy one'],`. The first name is the white & tabby cat, the second is the tuxedo. They'll sign their speech bubbles.
 
 ## Updating to a new version
 

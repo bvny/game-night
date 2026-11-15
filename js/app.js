@@ -38,6 +38,18 @@
     profileId: null, profiles: {}, libQuery: '', libFilter: 'all', libShow: 60,
   };
   let draft = null, confirmUnlink = false;
+  state.presence = {};
+  async function loadPresence() {
+    if (!LIVE) {
+      // fake-data mode: a couple of people "online"
+      state.presence = { bradley: { s: 1, g: 'Counter-Strike 2', gid: 730 }, conor: { s: 1, g: null }, dee: { s: 3, g: null } };
+    } else {
+      if (document.hidden) return;
+      try { state.presence = (await API.call('/api/presence')).presence || {}; } catch { return; }
+    }
+    renderCrew();
+  }
+  const isOnline = id => { const p = state.presence[id]; return p && (p.s > 0 || p.g); };
   function mergeGames(map) {
     Object.entries(map || {}).forEach(([key, raw]) => {
       const id = +key;
@@ -80,7 +92,7 @@
     else el.parentNode.classList.add('noimg');
   };
   const storeUrl = g => `https://store.steampowered.com/app/${g.id}/`;
-  const ggUrl = g => `https://gg.deals/steam/app/${g.id}/`;
+  const ggUrl = g => g.ggUrl || `https://gg.deals/steam/app/${g.id}/`;
   const money = v => SYM[state.cur] + v.toFixed(2);
   const P = g => (g.prices && g.prices[state.cur]) || { base: 0, steam: 0, key: null };
   const hasPrice = g => g.f2p || P(g).steam > 0;
@@ -184,6 +196,11 @@
     n.hidden = false;
   }
 
+  function setMenu(open) {
+    $('.top').classList.toggle('menu-open', open);
+    $('#menuBtn').setAttribute('aria-expanded', String(open));
+    $('#menuBtn').textContent = open ? '✕' : '☰';
+  }
   function renderTheme() {
     const dark = document.documentElement.getAttribute('data-theme') === 'dark';
     $('#themeBtn').textContent = dark ? '☀️' : '🌙';
@@ -201,16 +218,22 @@
 
   /* ---------- crew ---------- */
   function renderCrew() {
-    $('#crew').innerHTML = CREW.map(c =>
-      `<button class="chip ${state.on.has(c.id) ? 'on' : ''}" data-id="${c.id}">${av(c.id, 'sm')}${esc(c.name)}${c.private ? `<span class="lock">🔒 ${c.unlinked ? 'no Steam' : 'private'}</span>` : ''}</button>`
-    ).join('');
+    const sorted = [...CREW].sort((a, b) => (isOnline(b.id) ? 1 : 0) - (isOnline(a.id) ? 1 : 0));
+    $('#crew').innerHTML = sorted.map(c => {
+      const p = state.presence[c.id];
+      const dot = p && p.g ? '<span class="pdot game" title="In game"></span>' : p && p.s > 0 ? `<span class="pdot ${p.s === 1 ? 'on' : 'away'}" title="${p.s === 1 ? 'Online' : 'Away'}"></span>` : '';
+      return `<button class="chip ${state.on.has(c.id) ? 'on' : ''}" data-id="${c.id}"><span class="avwrap">${av(c.id, 'sm')}${dot}</span>${esc(c.name)}${p && p.g ? `<span class="ingame">🎮 ${esc(p.g)}</span>` : ''}${c.private ? `<span class="lock">🔒 ${c.unlinked ? 'no Steam' : 'private'}</span>` : ''}</button>`;
+    }).join('');
+    const n = CREW.filter(c => isOnline(c.id)).length;
+    const btn = $('[data-crew=online]');
+    if (btn) { btn.hidden = !n; btn.textContent = `Who's online (${n})`; }
   }
 
   /* ---------- game details: trailer + description ---------- */
   const detailCache = {};
   function getDetails(g) {
     const fallback = { description: g.desc || '', genres: [], categories: [], movie: null };
-    if (!LIVE || g.disc) return Promise.resolve(fallback);
+    if (!LIVE) return Promise.resolve(fallback);
     const key = g.id + ':' + CC[state.cur];
     if (!detailCache[key]) detailCache[key] = API.call(`/api/game/${g.id}?cc=${CC[state.cur]}`).catch(() => fallback);
     return detailCache[key];
@@ -246,7 +269,7 @@
     const media = root.querySelector('[data-media]');
     if (media && d.movie) mountVideo(media, d.movie, g);
   }
-  const mediaHtml = g => `<div class="media" data-media>${art(g)}${LIVE && !g.disc ? '' : '<span class="media-note">▶ Trailers play once Steam is connected</span>'}</div>`;
+  const mediaHtml = g => `<div class="media" data-media>${art(g)}${LIVE ? '' : '<span class="media-note">▶ Trailers play once Steam is connected</span>'}</div>`;
 
   function openDetails(id) {
     const g = gameById[id]; if (!g) return;
@@ -322,11 +345,12 @@
     const ppl = people(), o = state.sh;
     return GAMES.filter(g => {
       if (state.hidden.has(g.id)) return false;
-      if (o.single ? !knownSingle(g) : knownSingle(g)) return false;
+      if (o.pool !== 'shortlist' && (o.single ? !knownSingle(g) : knownSingle(g))) return false;
       if (o.modded && !g.modded) return false;
       const s = status(g, ppl);
       const owned = s.owners.length > 0;
-      if (o.pool === 'all' && (s.missing.length || !(owned || (g.f2p && !g.disc)))) return false;
+      if (o.pool === 'shortlist') { if (!pitchedSet().has(+g.id)) return false; }
+      else if (o.pool === 'all' && (s.missing.length || !(owned || (g.f2p && !g.disc)))) return false;
       if (o.pool === 'one' && (s.missing.length > 1 || !owned)) return false;
       if (o.coop && !g.coop) return false;
       if (o.pvp && !g.pvp) return false;
@@ -337,7 +361,7 @@
   }
   function renderShuffle() {
     const p = pool(), o = state.sh, g = state.current && gameById[state.current];
-    const pools = [['all', 'Everyone owns'], ['one', 'Missing ≤1'], ['any', 'Anything']];
+    const pools = [['all', 'Everyone owns'], ['one', 'Missing ≤1'], ['shortlist', 'Shortlist'], ['any', 'Anything']];
     const locks = [['fits', 'Fits everyone on'], ['coop', 'Co-op only'], ['pvp', 'PvP only'], ['free', 'Free only'], ['modded', '🔧 Modded only'], ['single', 'Single-player only']];
     $('#view').innerHTML = `<div class="shuffle"><div>
       ${g ? bigCard(g) : `<div class="bigcard"><div class="art noimg"><span class="fallback" style="font-size:40px">🎲</span></div>
@@ -566,9 +590,8 @@
     return `<div class="lb-layout"><div>
         <div class="filters" style="margin-bottom:16px">${modes.map(([k, l]) => `<button class="toggle ${mode === k ? 'on' : ''}" data-lb="${k}">${l}</button>`).join('')}</div>
         ${rows.map((r, i) => `<div class="lbrow ${i === 0 ? 'gold' : ''}">
-          ${i === 0 && r.val > 0 ? `<span class="tagline">${esc(tagline(r.c, mode))}</span>` : ''}
           <div class="rank-b r${i < 3 ? i + 1 : 0}">${i + 1}</div>${av(r.c.id, 'lg')}
-          <div class="who"><button class="linkbtn name" data-view="profile" data-profile="${r.c.id}">${esc(r.c.name)}</button>${mode !== 'owned' && r.top && r.topV ? `<div class="fav">Mostly ${esc(gname(r.top))} · ${fmt(r.topV)}h</div>` : ''}
+          <div class="who"><div class="who-top"><button class="linkbtn name" data-view="profile" data-profile="${r.c.id}">${esc(r.c.name)}</button>${i === 0 && r.val > 0 ? `<span class="tagline">${esc(tagline(r.c, mode))}</span>` : ''}</div>${mode !== 'owned' && r.top && r.topV ? `<div class="fav">Mostly ${esc(gname(r.top))} · ${fmt(r.topV)}h</div>` : ''}
             <div class="bar"><i style="width:${(r.val / max) * 100}%"></i></div></div>
           <div class="val">${fmt(r.val)}<small>${unit}</small></div></div>`).join('')}
         <p class="hint">${priv ? esc(priv) + ' not shown (Steam private or not linked). ' : ''}Nightly snapshots will add weekly and monthly boards.</p>
@@ -727,9 +750,9 @@
         : '<p class="hint">This builds up from nightly snapshots. Check back in a few days.</p>'}
       </div>
 
-      ${(x.stats || []).length || (x.achievements || []).length ? `<div class="pf-grid" style="margin-top:18px">
-        ${(x.stats || []).map(st => `<div class="panel"><h3>${esc(gname(st.appid))} <span class="hint" style="font:400 13px Outfit">· in-game stats</span></h3>
-          <div class="stats">${st.stats.map(k => `<div><span class="label">${esc(prettyStat(k.name))}</span><b>${statVal(k.name, k.value)}</b></div>`).join('')}</div></div>`).join('')}
+      ${(x.stats || []).some(st => (st.stats || []).some(k => /[a-z]{3,}/i.test(k.name))) || (x.achievements || []).length ? `<div class="pf-grid" style="margin-top:18px">
+        ${(x.stats || []).filter(st => (st.stats || []).some(k => /[a-z]{3,}/i.test(k.name))).map(st => `<div class="panel"><h3>${esc(gname(st.appid))} <span class="hint" style="font:400 13px Outfit">· in-game stats</span></h3>
+          <div class="stats">${st.stats.filter(k => /[a-z]{3,}/i.test(k.name)).map(k => `<div><span class="label">${esc(prettyStat(k.name))}</span><b>${statVal(k.name, k.value)}</b></div>`).join('')}</div></div>`).join('')}
         ${(x.achievements || []).length ? `<div class="panel"><h3>Achievements</h3>${x.achievements.map(a => `<div class="pbar"><span class="n">${esc(gname(a.appid))}</span>
           <div class="track gold"><i style="width:${a.achieved / a.total * 100}%"></i></div><span class="v">${a.achieved}/${a.total}</span></div>`).join('')}</div>` : ''}
       </div>` : ''}
@@ -808,7 +831,9 @@
   document.addEventListener('click', async e => {
     if (e.target.id === 'modal') return closeModal();
     const nav = e.target.closest('[data-view]');
-    if (nav && !e.ctrlKey && !e.metaKey) { e.preventDefault(); go(nav.dataset.view, { profile: nav.dataset.profile }); return; }
+    if (nav && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setMenu(false); go(nav.dataset.view, { profile: nav.dataset.profile }); return; }
+    if (e.target.closest('#menuBtn')) { setMenu(!$('.top').classList.contains('menu-open')); return; }
+    if ($('.top').classList.contains('menu-open') && !e.target.closest('.top')) setMenu(false);
     if (e.target.closest('#themeBtn')) { toggleTheme(); return; }
     const det = e.target.closest('[data-details]');
     if (det && !e.target.closest('[data-pitch]')) { openDetails(+det.dataset.details); return; }
@@ -821,7 +846,7 @@
       store.set(LIVE ? 'on-live' : 'on', [...state.on]); renderCrew(); render(); return;
     }
     if (d.crew) {
-      state.on = new Set(d.crew === 'all' ? CREW.map(c => c.id) : d.crew === 'core' ? CORE : []);
+      state.on = new Set(d.crew === 'all' ? CREW.map(c => c.id) : d.crew === 'core' ? CORE : d.crew === 'online' ? [ME, ...CREW.filter(c => isOnline(c.id)).map(c => c.id)] : []);
       store.set(LIVE ? 'on-live' : 'on', [...state.on]); renderCrew(); render(); return;
     }
     if (d.tf) { state.tf[d.tf] = !state.tf[d.tf]; render(); return; }
@@ -946,6 +971,7 @@
     if (e.target.id === 'note' && draft) { draft.note = e.target.value; $('#dpreview').innerHTML = discordPreview(); }
   });
   document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && $('.top').classList.contains('menu-open')) { setMenu(false); return; }
     if (e.key === 'Escape' && !$('#modal').hidden) { closeModal(); return; }
     const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
     if (e.code === 'Space' && state.view === 'shuffle' && !typing && $('#modal').hidden) { e.preventDefault(); roll(); }
@@ -961,6 +987,10 @@
   if (LIVE && D.PITCHES) { state.pitches = D.PITCHES; state.pitchesLoaded = true; }
   renderTheme();
   renderNotice();
+  if (!$('[data-crew=online]')) $('.crew-actions').insertAdjacentHTML('afterbegin', '<button class="linkbtn" data-crew="online" hidden>Who\'s online</button>');
   renderCrew();
   startView();
+  loadPresence();
+  if (LIVE) setInterval(loadPresence, 60_000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadPresence(); });
 })();

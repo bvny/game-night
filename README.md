@@ -29,6 +29,7 @@ js/config.js        ← the only file you edit: Worker URL + Discord invite
 js/data.js          fake sample data (also supplies the Discovery charts for now)
 js/api.js           login + loads real data from the Worker
 js/app.js           all the UI
+js/cats.js          the cat cameos
 worker/src/index.js the backend (Cloudflare Worker)
 worker/schema.sql   database tables (paste into the D1 console once)
 worker/SETUP.md     step-by-step backend setup
@@ -52,10 +53,10 @@ worker/SETUP.md     step-by-step backend setup
 - [x] Dark mode (warm espresso, follows your system setting, toggle in the header), clean URLs (no #tabs)
 - [x] Profiles: change/unlink Steam, hide games from the site, stats deep dive (hours, tags, daily history, achievements, in-game stats, library value)
 - [x] Steam review smileys (:D :) :| :( >:( ), 🔧 Modded tag (Steam Workshop / Moddable), Single-player only filter, "Pitched ✓" buttons, #1 leaderboard taglines
+- [x] Keyshop prices (GG.deals) next to Steam prices; live "who's online / in-game" from Steam; roll from the shortlist; mobile hamburger menu; cat cameos 🐈
 - [x] Shared pitches + votes, full Steam store search, posts to #game-night via webhook (pitches @mention the people they're for)
 
 ## Next steps
 
-1. **Keyshop prices**: cheapest keyshop (Loaded, G2A, etc.) from the free GG.deals API by Steam app ID + region. GG.deals' terms require crediting them and keeping their referral links.
-2. **Group-tagged max player counts** (Steam doesn't publish them).
-3. **Weekly / monthly leaderboards** from the daily snapshots.
+1. **Group-tagged max player counts** (Steam doesn't publish them).
+2. **Weekly / monthly leaderboards** from the daily snapshots.

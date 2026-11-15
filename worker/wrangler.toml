@@ -9,7 +9,7 @@ database_name = "burrito-game-night"
 database_id = "PASTE-YOUR-D1-DATABASE-ID"
 
 [triggers]
-crons = ["17 * * * *"]   # hourly: resync stale libraries + fill game info
+crons = ["*/10 * * * *"]   # every 10 min: keyshop prices; heavier jobs run at most hourly
 
 [vars]
 FRONTEND_URL = "https://gaymers.burritogang.com"

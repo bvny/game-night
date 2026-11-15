@@ -9,6 +9,7 @@
 //   DISCORD_REQUIRED_ROLE_ID  optional: role needed to get in
 //   DISCORD_WEBHOOK_URL       (secret) optional: webhook for the #game-night channel
 //   STEAM_API_KEY             (secret) from steamcommunity.com/dev/apikey
+//   GGDEALS_API_KEY           (secret) optional: keyshop prices from gg.deals/api
 //   SESSION_SECRET            (secret) long random string used to sign logins
 //   ALLOWED_ORIGINS           optional: comma-separated extra origins (e.g. local testing)
 
@@ -42,7 +43,15 @@ export default {
     }
   },
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(ensureSchema(env).then(() => hourly(env)));
+    ctx.waitUntil((async () => {
+      await ensureSchema(env);
+      const last = await env.DB.prepare("SELECT value FROM kv WHERE key='hourly_at'").first();
+      if (!last || Date.now() - +last.value > 55 * 60e3) {
+        await env.DB.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES ('hourly_at', ?)").bind(String(Date.now())).run();
+        await hourly(env);
+      }
+      try { await fillKeyshop(env); } catch (e) { console.error('keyshop', e); }
+    })());
   },
 };
 
@@ -56,7 +65,11 @@ async function ensureSchema(env) {
     env.DB.prepare('CREATE TABLE IF NOT EXISTS pitches (id INTEGER PRIMARY KEY AUTOINCREMENT, appid INTEGER NOT NULL, by_user TEXT NOT NULL, to_users TEXT, note TEXT, created_at INTEGER NOT NULL)'),
     env.DB.prepare('CREATE TABLE IF NOT EXISTS votes (pitch_id INTEGER NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY (pitch_id, user_id))'),
   ]);
-  await env.DB.prepare('CREATE TABLE IF NOT EXISTS hidden_games (user_id TEXT NOT NULL, appid INTEGER NOT NULL, PRIMARY KEY (user_id, appid))').run();
+  await env.DB.batch([
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS hidden_games (user_id TEXT NOT NULL, appid INTEGER NOT NULL, PRIMARY KEY (user_id, appid))'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS keyshop (appid INTEGER NOT NULL, cc TEXT NOT NULL, price REAL, url TEXT, fetched_at INTEGER, PRIMARY KEY (appid, cc))'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)'),
+  ]);
   let added = false;
   for (const col of ['description TEXT', 'header TEXT', 'review_score INTEGER', 'review_pct INTEGER', 'review_count INTEGER', 'modded INTEGER DEFAULT 0', 'workshop INTEGER DEFAULT 0']) {
     try { await env.DB.prepare(`ALTER TABLE games ADD COLUMN ${col}`).run(); added = true; }
@@ -86,6 +99,7 @@ async function route(req, env, ctx) {
     if (p === '/api/me' && M === 'GET') return json({ user: publicMe(user) });
     if (p === '/api/crew' && M === 'GET') return crew(env, ctx);
     if (p === '/api/discovery' && M === 'GET') return discovery(env);
+    if (p === '/api/presence' && M === 'GET') return presence(env, ctx);
     if (p === '/api/search' && M === 'GET') return search(env, ctx, url);
     if (p === '/api/steam/link' && M === 'POST') return steamLink(req, env, ctx, user);
     if (p === '/api/steam/link' && M === 'DELETE') {
@@ -434,19 +448,29 @@ async function discovery(env) {
     rows = (await env.DB.prepare('SELECT kind, rank, appid, value, fetched_at FROM charts ORDER BY kind, rank').all()).results;
   }
   const games = (await env.DB.prepare('SELECT * FROM games WHERE appid IN (SELECT appid FROM charts)').all()).results;
+  const keys = await keysFor(env, 'SELECT appid FROM charts');
   const charts = {};
   for (const r of rows) (charts[r.kind] = charts[r.kind] || []).push({ appid: r.appid, rank: r.rank, value: r.value });
   return json({
     charts,
-    games: Object.fromEntries(games.filter(g => g.name).map(g => [g.appid, shapeGame(g, true)])),
+    games: Object.fromEntries(games.filter(g => g.name).map(g => [g.appid, shapeGame(g, true, keys)])),
     updated: rows.reduce((a, r) => Math.max(a, r.fetched_at || 0), 0),
   });
 }
 
 /* ------------------------------------------------------------------ crew + search */
 
-function shapeGame(g, withDesc) {
+// Keyshop prices (GG.deals) for a set of games: { appid: { ie: {p, url}, gb: ..., us: ... } }
+async function keysFor(env, whereSql, ...binds) {
+  const rows = (await env.DB.prepare(`SELECT appid, cc, price, url FROM keyshop WHERE price IS NOT NULL AND appid IN (${whereSql})`).bind(...binds).all()).results;
+  const out = {};
+  for (const r of rows) (out[r.appid] = out[r.appid] || {})[r.cc] = { p: r.price, url: r.url };
+  return out;
+}
+
+function shapeGame(g, withDesc, keys) {
   return {
+    keys: (keys && keys[g.appid]) || null,
     name: g.name, is_free: !!g.is_free, coop: !!g.coop, pvp: !!g.pvp, multi: !!g.multi,
     max_players: g.max_players, tags: g.genres ? JSON.parse(g.genres) : [],
     prices: g.prices ? JSON.parse(g.prices) : null, meta_at: g.meta_at,
@@ -471,13 +495,14 @@ async function crew(env, ctx) {
   }
   const library = {};
   for (const r of lib.results) (library[r.user_id] = library[r.user_id] || {})[r.appid] = [r.minutes, r.minutes_2w];
+  const keys = await keysFor(env, 'SELECT DISTINCT appid FROM library');
   return json({
     users: users.results.map(u => ({
       id: u.id, name: u.name, avatar: u.avatar, steam_id: !!u.steam_id,
       steam_private: !!u.steam_private, game_count: u.game_count, last_sync: u.last_sync,
     })),
     library,
-    games: Object.fromEntries(games.results.map(g => [g.appid, shapeGame(g, false)])),
+    games: Object.fromEntries(games.results.map(g => [g.appid, shapeGame(g, false, keys)])),
     pending_info: missing ? missing.n : 0,
   });
 }
@@ -500,7 +525,7 @@ async function search(env, ctx, url) {
   const known = {};
   for (const id of ids) {
     const g = await env.DB.prepare('SELECT * FROM games WHERE appid=?').bind(id).first();
-    if (g && g.name && g.meta_at) known[id] = shapeGame(g, true);
+    if (g && g.name && g.meta_at) known[id] = shapeGame(g, true, null);
   }
   const unknown = ids.filter(id => !known[id]);
   if (unknown.length) {
@@ -571,7 +596,8 @@ async function steamExtras(env, ctx, sid, appids) {
   await Promise.all(appids.slice(0, 3).map(async appid => {
     const d = await get(`${STEAM_API}/ISteamUserStats/GetUserStatsForGame/v2/?key=${k}&steamid=${sid}&appid=${appid}`);
     const st = d && d.playerstats && d.playerstats.stats;
-    if (Array.isArray(st) && st.length) out.stats.push({ appid, stats: pickStats(st) });
+    const picked = Array.isArray(st) ? pickStats(st) : [];
+    if (picked.length) out.stats.push({ appid, stats: picked });
   }));
   ctx.waitUntil(cache.put(key, new Response(JSON.stringify(out), { headers: { 'Cache-Control': 'public, max-age=21600' } })));
   return out;
@@ -580,7 +606,7 @@ async function steamExtras(env, ctx, sid, appids) {
 // Keep the in-game stats people actually care about (kills, wins, time...), max 8
 function pickStats(stats) {
   const score = n => /kill|death|win|mvp|headshot|match|round|time_played|damage|score|assist|played|contract|wave|level|distance/i.test(n) ? 2 : 0;
-  return stats.filter(s => typeof s.value === 'number' && s.value > 0 && !/^(last_|gi\.|stat_)/i.test(s.name))
+  return stats.filter(s => typeof s.value === 'number' && s.value > 0 && /[a-z]{3,}/i.test(s.name) && !/^(last_|gi\.|stat_)/i.test(s.name))
     .sort((a, b) => score(b.name) - score(a.name)).slice(0, 8).map(s => ({ name: s.name, value: s.value }));
 }
 
@@ -603,12 +629,13 @@ async function listPitches(env) {
   ]);
   const votes = {};
   for (const x of v.results) (votes[x.pitch_id] = votes[x.pitch_id] || []).push(x.user_id);
+  const keys = await keysFor(env, 'SELECT appid FROM pitches');
   return json({
     pitches: p.results.map(x => ({
       id: String(x.id), game: x.appid, by: x.by_user, to: JSON.parse(x.to_users || '[]'),
       note: x.note || '', at: x.created_at, votes: votes[x.id] || [],
     })),
-    games: Object.fromEntries(g.results.filter(x => x.name).map(x => [x.appid, shapeGame(x, true)])),
+    games: Object.fromEntries(g.results.filter(x => x.name).map(x => [x.appid, shapeGame(x, true, keys)])),
   });
 }
 
@@ -756,6 +783,63 @@ function pickMovie(movies) {
     webm: https((m.webm && (m.webm['480'] || m.webm.max)) || null),
     hls: https(m.hls_h264 || null),
   };
+}
+
+/* ------------------------------------------------------------------ presence (who's online / in-game on Steam) */
+
+async function presence(env, ctx) {
+  const cache = caches.default;
+  const key = new Request('https://cache.burrito.local/presence');
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  const users = (await env.DB.prepare('SELECT id, steam_id FROM users WHERE steam_id IS NOT NULL').all()).results;
+  const out = {};
+  for (let i = 0; i < users.length; i += 100) {
+    const chunk = users.slice(i, i + 100);
+    try {
+      const r = await fetch(`${STEAM_API}/ISteamUser/GetPlayerSummaries/v2/?key=${env.STEAM_API_KEY}&steamids=${chunk.map(u => u.steam_id).join(',')}`);
+      const d = r.ok ? await r.json() : {};
+      const bySid = Object.fromEntries(((d.response && d.response.players) || []).map(p => [p.steamid, p]));
+      for (const u of chunk) {
+        const p = bySid[u.steam_id];
+        if (p) out[u.id] = { s: p.personastate || 0, g: p.gameextrainfo || null, gid: p.gameid ? +p.gameid : null };
+      }
+    } catch (e) { console.error('presence', e); }
+  }
+  const res = json({ presence: out, at: Date.now() }, 200, { 'Cache-Control': 'public, max-age=45' });
+  ctx.waitUntil(cache.put(key, res.clone()));
+  return res;
+}
+
+/* ------------------------------------------------------------------ keyshop prices (GG.deals) */
+
+// One request per run (max 100 games): GG.deals allows 100 records/minute and 1,000/hour.
+async function fillKeyshop(env) {
+  if (!env.GGDEALS_API_KEY) return 0;
+  const stale = Date.now() - 24 * 3600e3;
+  for (const cc of CC_LIST) {
+    const ids = (await env.DB.prepare(
+      `SELECT g.appid FROM games g LEFT JOIN keyshop k ON k.appid = g.appid AND k.cc = ?
+       WHERE g.is_free = 0 AND g.name IS NOT NULL AND g.meta_at IS NOT NULL AND (k.fetched_at IS NULL OR k.fetched_at < ?)
+         AND (g.appid IN (SELECT appid FROM pitches) OR g.appid IN (SELECT appid FROM charts) OR g.appid IN (SELECT appid FROM library))
+       ORDER BY (g.appid IN (SELECT appid FROM pitches)) DESC, g.multi DESC, (g.appid IN (SELECT appid FROM charts)) DESC
+       LIMIT 100`
+    ).bind(cc, stale).all()).results.map(r => r.appid);
+    if (!ids.length) continue;
+    const r = await fetch(`https://api.gg.deals/v1/prices/by-steam-app-id/?ids=${ids.join(',')}&key=${env.GGDEALS_API_KEY}&region=${cc}`);
+    if (!r.ok) { console.error('gg.deals', r.status, (await r.text()).slice(0, 200)); return 0; }
+    const d = await r.json();
+    const now = Date.now();
+    const stmts = ids.map(id => {
+      const e = d.data && d.data[id];
+      const price = e && e.prices && e.prices.currentKeyshops != null ? parseFloat(e.prices.currentKeyshops) : null;
+      return env.DB.prepare('INSERT OR REPLACE INTO keyshop (appid, cc, price, url, fetched_at) VALUES (?, ?, ?, ?, ?)')
+        .bind(id, cc, Number.isFinite(price) ? price : null, (e && e.url) || null, now);
+    });
+    await env.DB.batch(stmts);
+    return ids.length;
+  }
+  return 0;
 }
 
 /* ------------------------------------------------------------------ hourly job */
