@@ -54,7 +54,7 @@ This signs everyone's logins. Make it 40+ random characters, for example from a 
 
 1. Cloudflare left menu: **Storage & Databases → D1 SQL Database → Create**.
 2. Name it `burrito-game-night` and click **Create**.
-3. Open it, go to the **Console** tab, paste **everything** from `worker/schema.sql`, and click **Execute**. You should see 4 tables created.
+3. Open it, go to the **Console** tab, paste **everything** from `worker/schema.sql`, and click **Execute**. Then type `/tables` and Execute again: you should see `users`, `library`, `games` and `snapshots`. (The menu may call it "D1 SQLite Database". That is the same thing.)
 
 ## Step 6: Put the code in the Worker
 
@@ -80,6 +80,7 @@ This signs everyone's logins. Make it 40+ random characters, for example from a 
 | `STEAM_API_KEY` | Secret | from step 3 |
 | `SESSION_SECRET` | Secret | from step 4 |
 | `DISCORD_REQUIRED_ROLE_ID` | Text | *(optional)* |
+| `DISCORD_WEBHOOK_URL` | Secret | *(optional)* webhook for #game-night, see "Discord posting" below |
 
 Click **Deploy** after adding them.
 
@@ -117,6 +118,23 @@ Open your Worker URL in a browser. You should see:
 Brand-new libraries show straight away. Co-op/PvP tags and prices for each game fill in over the next few hours, starting with the games most people own. Opening a game's details fills that game in immediately.
 
 ---
+
+## Discord posting (#game-night)
+
+Pitches and "👍 We're playing this" rolls get posted to a channel through a webhook. No bot is needed.
+
+1. In Discord, hover **#game-night** and click ⚙️ **Edit Channel**, then **Integrations → Webhooks → New Webhook**.
+2. Name it **Game Night** (optionally give it the burrito as its picture), then click **Copy Webhook URL**.
+3. In Cloudflare, go to **Worker → Settings → Variables and Secrets → Add**. Name it `DISCORD_WEBHOOK_URL`, choose type **Secret**, paste the URL, and click **Deploy**.
+
+The webhook URL is a password for posting in that channel. Only ever paste it into Cloudflare.
+- Pitches to specific people @mention them.
+- Pitches to everyone and shuffle rolls don't ping anyone.
+
+## Updating to a new version
+
+1. **Worker:** go to **Edit code**, select all, paste the new `worker/src/index.js`, and click **Deploy**. The database upgrades itself on the next request, so you don't need the console.
+2. **Website:** upload the changed files to GitHub. Keep your edited `js/config.js`, or re-enter your Worker URL in the new one.
 
 ## Troubleshooting
 

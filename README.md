@@ -47,13 +47,12 @@ worker/SETUP.md     step-by-step backend setup
 - [x] Steam auto-link from Discord connections, or manual link by profile URL / custom URL / SteamID64
 - [x] Library + playtime sync, private-profile detection, hourly refresh, daily playtime snapshots
 - [x] Game details: Steam trailer (mp4 or HLS), description, genres and multiplayer categories
-- [x] Co-op / PvP / multiplayer flags and IE / UK / US Steam prices filled in by the hourly job
+- [x] Co-op / PvP / multiplayer flags, Steam tags, descriptions and IE / UK / US prices for whole libraries in one go (Steam's bulk store lookup)
+- [x] Discovery: Steam's top 100 Most Played, Top Sellers, Popular New Releases and On Sale, refreshed daily
+- [x] Shared pitches + votes, full Steam store search, posts to #game-night via webhook (pitches @mention the people they're for)
 
 ## Next steps
 
-1. **Pitches + votes saved in the database**, plus a **Discord webhook** posting to `#game-pitches`.
-2. **Real Discovery charts**: `ISteamChartsService/GetMostPlayedGames` plus `store.steampowered.com/api/featuredcategories` (top sellers, specials), cached daily.
-3. **Full Steam store search** in Pitches.
-4. **Keyshop prices**: cheapest keyshop (Loaded, G2A, etc.) from the free GG.deals API by Steam app ID + region. GG.deals' terms require crediting them and keeping their referral links.
-5. **Group-tagged max player counts** (Steam doesn't publish them).
-6. **Weekly / monthly leaderboards** from the daily snapshots.
+1. **Keyshop prices**: cheapest keyshop (Loaded, G2A, etc.) from the free GG.deals API by Steam app ID + region. GG.deals' terms require crediting them and keeping their referral links.
+2. **Group-tagged max player counts** (Steam doesn't publish them).
+3. **Weekly / monthly leaderboards** from the daily snapshots.

@@ -18,7 +18,7 @@
   }
 
   window.BG_API = {
-    live: !!API, call,
+    live: !!API, call, normaliseGame: (id, g) => normaliseGame(id, g),
     loginUrl: API + '/auth/login',
     logout() { tok.set(null); location.hash = ''; location.reload(); },
   };
@@ -29,7 +29,7 @@
     const tags = [];
     if (g.coop) tags.push('Co-op');
     if (g.pvp) tags.push('PvP');
-    (g.genres || []).slice(0, 2).forEach(t => { if (!tags.includes(t)) tags.push(t); });
+    (g.tags || []).forEach(t => { if (tags.length < 4 && !tags.includes(t) && !/^(Co-op|Online Co-Op|PvP|Multiplayer)$/i.test(t)) tags.push(t); });
     const pr = cc => {
       const p = g.prices && g.prices[cc];
       return p ? { base: p.initial / 100, steam: p.final / 100, key: null } : { base: 0, steam: 0, key: null };
@@ -37,14 +37,13 @@
     const ie = g.prices && g.prices.ie;
     return {
       id, name: g.name || `App ${id}`, f2p: !!g.is_free, price: ie ? ie.final / 100 : 0,
-      coop: !!g.coop, pvp: !!g.pvp, multi: !!g.multi, max: g.max_players || null, tags,
-      sale: ie ? ie.discount || 0 : 0, desc: '',
+      coop: !!g.coop, pvp: !!g.pvp, multi: !!g.multi, known: !!g.meta_at, max: g.max_players || null, tags,
+      sale: ie ? ie.discount || 0 : 0, desc: g.description || '',
       prices: { EUR: pr('ie'), GBP: pr('gb'), USD: pr('us') },
     };
   }
 
   function buildData(me, crew) {
-    const mock = window.BG_DATA || { GAMES: [] };
     const CREW = crew.users.map((u, i) => ({
       id: u.id, name: u.name, avatar: u.avatar, color: PALETTE[i % PALETTE.length],
       private: !u.steam_id || u.steam_private, unlinked: !u.steam_id,
@@ -55,9 +54,7 @@
       Object.entries(games).forEach(([appid, [m, m2]]) => { LIB[uid][appid] = { h: Math.round(m / 6) / 10, h2w: Math.round(m2 / 6) / 10 }; });
     });
     const GAMES = Object.entries(crew.games).map(([appid, g]) => normaliseGame(+appid, g));
-    // Discovery charts are still sample data until the next backend step
-    mock.GAMES.filter(g => g.disc && !crew.games[g.id]).forEach(g => GAMES.push(g));
-    window.BG_DATA = { CREW, GAMES, LIB, ME: me.user.id, PITCHES: [], live: true, me: me.user };
+    window.BG_DATA = { CREW, GAMES, LIB, ME: me.user.id, PITCHES: [], live: true, me: me.user, pendingInfo: crew.pending_info || 0 };
   }
 
   window.BG_READY = (async () => {

@@ -31,12 +31,21 @@
     tf: { multi: true, coop: false, pvp: false, fits: false, cheap: false },
     sh: Object.assign({ pool: 'all', coop: false, pvp: false, free: false, fits: true }, store.get('shuffle', {})),
     hidden: new Set(), history: [], current: null, rolling: false,
-    pitches: store.get(LIVE ? 'pitches-live' : 'pitches', D.PITCHES || []),
+    pitches: LIVE ? [] : store.get('pitches', D.PITCHES || []),
     query: '', lb: 'recent', lbView: 'rank', cmp: [ME, firstOther],
     cur: store.get('cur', 'EUR'),
     disc: { src: 'played', unowned: true, multi: true, cheap: false },
   };
   let draft = null;
+  function mergeGames(map) {
+    Object.entries(map || {}).forEach(([key, raw]) => {
+      const id = +key;
+      if (gameById[id]) { if (raw.description && !gameById[id].desc) gameById[id].desc = raw.description; return; }
+      const g = API.normaliseGame(id, raw);
+      g.disc = !CREW.some(c => owns(c.id, id));
+      GAMES.push(g); gameById[id] = g;
+    });
+  }
 
   /* ---------- helpers ---------- */
   const people = () => [...state.on];
@@ -44,7 +53,8 @@
   const hrs = (pid, gid) => (LIB[pid] && LIB[pid][gid] ? LIB[pid][gid].h : 0);
   const ownCount = g => CREW.filter(c => owns(c.id, g.id)).length;
   const names = ids => ids.map(i => crewById[i].name).join(', ');
-  const isMulti = g => g.coop || g.pvp || g.multi;
+  const isMulti = g => g.coop || g.pvp || g.multi || g.known === false; // unknown = not yet fetched from Steam
+  const knownSingle = g => g.known !== false && !(g.coop || g.pvp || g.multi);
 
   function status(g, ppl = people()) {
     const known = ppl.filter(p => !crewById[p].private);
@@ -84,7 +94,7 @@
   }
   const art = (g, details = false) => `<div class="art ${details ? 'clickable' : ''}" ${details ? `data-details="${g.id}"` : ''}><img src="${img(g)}" alt="" loading="lazy" onerror="this.parentNode.classList.add('noimg')"><span class="fallback">${esc(g.name)}</span>${details ? '<span class="play">▶</span>' : ''}</div>`;
   const tags = g => `<div class="tags">${g.tags.map(t => `<span class="tag ${t === 'Co-op' ? 'coop' : t === 'PvP' ? 'pvp' : ''}">${esc(t)}</span>`).join('')}</div>`;
-  const playersTxt = g => g.max ? `👥 up to ${g.max}` : (g.coop || g.pvp || g.multi) ? '👥 multiplayer' : '👤 single-player?';
+  const playersTxt = g => g.max ? `👥 up to ${g.max}` : (g.coop || g.pvp || g.multi) ? '👥 multiplayer' : g.known === false ? '👥 checking Steam…' : '👤 single-player';
   const needsHtml = s => `<div class="needs"><b>Needs:</b> ${s.missing.map(p => av(p, 'sm') + ' ' + esc(crewById[p].name)).join(' ')}</div>`;
   const unknownHtml = s => s.unknown.length ? `<div class="unknown">? ${esc(names(s.unknown))}: Steam private / not linked</div>` : '';
   function ago(ts) {
@@ -239,7 +249,8 @@
     const cap = list => list.slice(0, 48);
 
     const fl = [['multi', 'Multiplayer only'], ['coop', 'Co-op'], ['pvp', 'PvP'], ['fits', ppl.length > 1 ? `Fits all ${ppl.length} of us` : 'Fits the group'], ['cheap', `Under ${SYM[state.cur]}20`]];
-    v.innerHTML =
+    const pending = LIVE && D.pendingInfo ? `<p class="hint" style="margin:0 0 12px">⏳ Still fetching Steam info (co-op/PvP, prices) for ${D.pendingInfo} games. Refresh in a minute.</p>` : '';
+    v.innerHTML = pending +
       `<div class="filters">${fl.map(([k, l]) => `<button class="toggle ${f[k] ? 'on' : ''}" data-tf="${k}">${l}</button>`).join('')}</div>` +
       section('Everyone owns', cap(ready), ready.length, 'Ready to launch right now.', 'ready') +
       section('Almost', cap(almost), almost.length, 'Only 1 or 2 people need to buy it.', 'almost') +
@@ -266,10 +277,11 @@
     const ppl = people(), o = state.sh;
     return GAMES.filter(g => {
       if (state.hidden.has(g.id)) return false;
-      if (LIVE && !isMulti(g) && !g.disc) return false;
+      if (knownSingle(g)) return false;
       const s = status(g, ppl);
-      if (o.pool === 'all' && (s.missing.length || (LIVE && !s.owners.length && !g.f2p))) return false;
-      if (o.pool === 'one' && (s.missing.length > 1 || (LIVE && !s.owners.length && !g.f2p))) return false;
+      const owned = s.owners.length > 0;
+      if (o.pool === 'all' && (s.missing.length || !(owned || (g.f2p && !g.disc)))) return false;
+      if (o.pool === 'one' && (s.missing.length > 1 || !owned)) return false;
       if (o.coop && !g.coop) return false;
       if (o.pvp && !g.pvp) return false;
       if (o.free && !g.f2p) return false;
@@ -342,33 +354,54 @@
   }
 
   /* ---------- discovery ---------- */
+  const SRC = LIVE ? [['played', 'Most played'], ['seller', 'Top sellers'], ['popularnew', 'Popular new'], ['sale', 'On sale']]
+                   : [['played', 'Most played'], ['seller', 'Top sellers'], ['sale', 'On sale']];
+  let chartsLoading = false;
+  function chartList(src) {
+    if (LIVE) return ((state.charts && state.charts[src]) || []).map(r => ({ g: gameById[r.appid], rank: r.rank, value: r.value })).filter(x => x.g);
+    return GAMES.filter(g => src === 'sale' ? g.sale : g[src]).map(g => ({ g, rank: g[src] || 0, value: null }))
+      .sort((a, b) => src === 'sale' ? b.g.sale - a.g.sale : a.rank - b.rank);
+  }
+  async function loadCharts() {
+    if (chartsLoading) return; chartsLoading = true;
+    try { const d = await API.call('/api/discovery'); mergeGames(d.games); state.charts = d.charts; state.chartsUpdated = d.updated; }
+    catch { state.charts = {}; toast('Could not load the Steam charts. Try again in a minute.'); }
+    chartsLoading = false;
+    if (state.view === 'discovery') render();
+  }
+  const fmtNum = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
   function renderDiscovery() {
     const d = state.disc;
-    const srcs = [['played', 'Most played'], ['seller', 'Top sellers'], ['sale', 'On sale']];
-    const list = GAMES.filter(g => {
-      if (d.src === 'sale' ? !g.sale : !g[d.src]) return false;
+    if (LIVE && !state.charts) {
+      $('#view').innerHTML = `<div class="section-head" style="margin-top:0"><h2>Discovery</h2></div><div class="empty">Loading Steam's charts…</div>`;
+      loadCharts(); return;
+    }
+    const all = chartList(d.src);
+    const list = all.filter(({ g }) => {
       if (d.unowned && ownCount(g) > 0) return false;
       if (d.multi && !isMulti(g)) return false;
       if (d.cheap && !cheap(g)) return false;
       return true;
-    }).sort((a, b) => d.src === 'sale' ? b.sale - a.sale : a[d.src] - b[d.src]).slice(0, 20);
+    });
     const fl = [['unowned', 'Nobody owns it yet'], ['multi', 'Multiplayer only'], ['cheap', `Under ${SYM[state.cur]}20`]];
+    const when = state.chartsUpdated ? ` · updated ${ago(state.chartsUpdated)}` : '';
     $('#view').innerHTML = `
-      <div class="section-head" style="margin-top:0"><h2>Discovery</h2><p>What's trending on Steam that the crew hasn't got yet. Click a game for the trailer.</p></div>
+      <div class="section-head" style="margin-top:0"><h2>Discovery</h2><span class="count">${list.length}</span><p>Steam's live charts${LIVE ? when : ''}. Click a game for the trailer.</p></div>
       <div class="disc-bar">
-        <div class="seg" style="min-width:330px">${srcs.map(([k, l]) => `<button class="${d.src === k ? 'on' : ''}" data-dsrc="${k}">${l}</button>`).join('')}</div>
+        <div class="seg" style="min-width:${SRC.length * 112}px">${SRC.map(([k, l]) => `<button class="${d.src === k ? 'on' : ''}" data-dsrc="${k}">${l}</button>`).join('')}</div>
         <div class="filters">${fl.map(([k, l]) => `<button class="toggle ${d[k] ? 'on' : ''}" data-dtf="${k}">${l}</button>`).join('')}</div>
       </div>
-      ${list.length ? `<div class="grid" style="margin-top:20px">${list.map(discCard).join('')}</div>` : `<div class="empty" style="margin-top:20px">Nothing matches. Try turning a filter off.</div>`}
-      <p class="hint" style="margin-top:20px">Charts are sample data for now. The next backend step pulls Steam's own Most Played, Top Sellers and Specials charts. Keyshop prices via <a href="https://gg.deals" target="_blank" rel="noopener">GG.deals</a>.</p>`;
+      ${list.length ? `<div class="grid" style="margin-top:20px">${list.map(discCard).join('')}</div>`
+        : `<div class="empty" style="margin-top:20px">${all.length ? 'Nothing matches. Try turning a filter off.' : 'No chart data yet. Check back in a few minutes.'}</div>`}
+      <p class="hint" style="margin-top:20px">${all.length - list.length > 0 ? `${all.length - list.length} more hidden by filters. ` : ''}Charts refresh daily from Steam. Keyshop prices via <a href="https://gg.deals" target="_blank" rel="noopener">GG.deals</a>.</p>`;
   }
-  function discCard(g) {
+  function discCard({ g, rank, value }) {
     const d = state.disc, n = ownCount(g);
-    const badge = d.src === 'sale' ? `-${g.sale}%` : `#${g[d.src]}`;
+    const badge = d.src === 'sale' ? (g.sale ? `-${g.sale}%` : `#${rank}`) : `#${rank}`;
     return `<article class="gcard"><div style="position:relative">${art(g, true)}<span class="rank">${badge}</span></div>
       <div class="body"><h4>${esc(g.name)}</h4>${tags(g)}
-        <p class="desc sm">${esc(g.desc || '')}</p>
-        <div class="meta"><span>${playersTxt(g)}</span><span>${n ? n + ' of the crew own it' : 'Nobody owns it'}</span></div>
+        <p class="desc sm">${esc((g.desc || '').slice(0, 160))}${(g.desc || '').length > 160 ? '…' : ''}</p>
+        <div class="meta"><span>${value ? `🔥 ${fmtNum(value)} peak players` : playersTxt(g)}</span><span>${n ? n + ' of the crew own it' : 'Nobody owns it'}</span></div>
         ${priceBlock(g)}
       </div>
       <div class="actions"><button class="btn sm ghost" data-pitch="${g.id}">Pitch it</button><button class="linkbtn" data-details="${g.id}">▶ Trailer &amp; details</button></div>
@@ -376,12 +409,21 @@
   }
 
   /* ---------- pitches ---------- */
+  let pitchesLoading = false, searchT, searchSeq = 0;
+  async function loadPitches() {
+    if (pitchesLoading) return; pitchesLoading = true;
+    try { const d = await API.call('/api/pitches'); mergeGames(d.games); state.pitches = d.pitches; state.pitchesLoaded = true; }
+    catch { toast('Could not load pitches.'); state.pitchesLoaded = true; }
+    pitchesLoading = false;
+    if (state.view === 'pitches') render();
+  }
   function renderPitches() {
+    if (LIVE && !state.pitchesLoaded) { $('#view').innerHTML = `<div class="empty">Loading pitches…</div>`; loadPitches(); return; }
     const sorted = [...state.pitches].filter(p => gameById[p.game] && crewById[p.by]).sort((a, b) => b.votes.length - a.votes.length || b.at - a.at);
     $('#view').innerHTML = `<div class="pitch-layout"><div>
         <div class="section-head" style="margin-top:0"><h2>Search</h2></div>
         <div class="search"><input id="q" placeholder="Search for a game…" value="${esc(state.query)}" autocomplete="off"></div>
-        <p class="hint">Searches the crew's libraries plus trending games for now. Full Steam store search comes with the next backend step.</p>
+        <p class="hint">${LIVE ? 'Searches the whole Steam store.' : 'The prototype only searches a small fake list.'}</p>
         <div class="results" id="results">${resultsHtml()}</div>
       </div><div>
         <div class="section-head" style="margin-top:0"><h2>Shortlist</h2><span class="count">${sorted.length}</span><p>Vote for what you'd play.</p></div>
@@ -391,7 +433,10 @@
   function resultsHtml() {
     const q = state.query.trim().toLowerCase();
     if (!q) return `<div class="empty">Try “lethal”, “deep rock” or “golf”.</div>`;
-    const res = GAMES.filter(g => g.name.toLowerCase().includes(q)).slice(0, 8);
+    const local = GAMES.filter(g => g.name.toLowerCase().includes(q) && ownCount(g) > 0);
+    const remote = (state.searchQ === q ? state.searchIds || [] : []).map(id => gameById[id]).filter(Boolean);
+    const res = [...new Map([...remote, ...local].map(g => [g.id, g])).values()].slice(0, 10);
+    if (!res.length && LIVE && state.searchQ !== q) return `<div class="empty">Searching Steam…</div>`;
     if (!res.length) return `<div class="empty">No matches for “${esc(state.query)}”.</div>`;
     return res.map(g => `<div class="result">${art(g, true)}<div><b>${esc(g.name)}</b><small>${ownCount(g)} of the crew own it</small>${priceBlock(g)}</div><button class="btn sm" data-pitch="${g.id}">Pitch it</button></div>`).join('');
   }
@@ -400,7 +445,7 @@
     const to = p.to.length ? p.to.filter(t => crewById[t]).map(t => '@' + esc(crewById[t].name)).join(' ') : 'everyone';
     return `<div class="pitch">
       <button class="vote ${mine ? 'on' : ''}" data-vote="${p.id}" title="${mine ? 'Remove vote' : 'Vote'}"><span>▲</span>${p.votes.length}</button>
-      <div><h4>${esc(g.name)}</h4>
+      <div><h4>${esc(g.name)}${p.by === ME && LIVE ? ` <button class="linkbtn del" data-delpitch="${p.id}" title="Delete your pitch">delete</button>` : ''}</h4>
         <div class="by">${av(p.by, 'sm')} ${esc(crewById[p.by].name)} → ${to} · ${ago(p.at)}</div>
         ${p.note ? `<div class="note">“${esc(p.note)}”</div>` : ''}
         <div class="foot"><span>${price(g)}</span><span>${ownCount(g)}/${CREW.length} own it</span><span class="stack">${p.votes.filter(v => crewById[v]).map(v => av(v, 'sm')).join('')}</span><button class="linkbtn" data-details="${g.id}">▶ Trailer</button></div>
@@ -417,7 +462,7 @@
         ${CREW.filter(c => c.id !== ME).map(c => `<button class="chip ${draft.to.includes(c.id) ? 'on' : ''}" data-to="${c.id}">${av(c.id, 'sm')}${esc(c.name)}</button>`).join('')}
       </div></div>
       <div><div class="label" style="margin-bottom:8px">Note</div><textarea id="note" rows="2" placeholder="Hey look at this game…">${esc(draft.note)}</textarea></div>
-      <div><div class="label" style="margin-bottom:8px">Discord preview · #game-pitches</div><div id="dpreview">${discordPreview()}</div></div>
+      <div><div class="label" style="margin-bottom:8px">Discord preview · #game-night</div><div id="dpreview">${discordPreview()}</div></div>
       <div style="display:flex;gap:10px;justify-content:flex-end"><button class="btn ghost" data-close>Cancel</button><button class="btn blurple" id="sendPitch">Send pitch</button></div>
     </div></div>`;
   }
@@ -549,7 +594,12 @@
     if (t.id === 'rollBtn') { roll(); return; }
     if (d.act === 'yes' && state.current) {
       if (state.history[0]) state.history[0].verdict = '👍 playing';
-      toast(`Posted to <b>#game-pitches</b>: the group rolled <b>${esc(gameById[state.current].name)}</b> 🎲 (mock)`);
+      const gname = esc(gameById[state.current].name);
+      if (LIVE) {
+        try { const r = await API.call('/api/announce', { method: 'POST', body: JSON.stringify({ appid: state.current, players: people() }) });
+          toast(r.posted ? `Posted to <b>#game-night</b>: tonight's game is <b>${gname}</b> 🎲` : `Tonight's game: <b>${gname}</b> 🎲`); }
+        catch { toast('Could not post to Discord.'); }
+      } else toast(`Posted to <b>#game-night</b>: the group rolled <b>${gname}</b> 🎲 (mock)`);
       render(); return;
     }
     if (d.act === 'nah' && state.current) {
@@ -562,7 +612,16 @@
     if (d.pitch) { openPitch(d.pitch); return; }
     if (d.vote) {
       const p = state.pitches.find(x => x.id === d.vote);
-      if (p) { p.votes = p.votes.includes(ME) ? p.votes.filter(v => v !== ME) : [...p.votes, ME]; store.set(LIVE ? 'pitches-live' : 'pitches', state.pitches); render(); }
+      if (p) {
+        p.votes = p.votes.includes(ME) ? p.votes.filter(v => v !== ME) : [...p.votes, ME]; render();
+        if (LIVE) API.call(`/api/pitches/${p.id}/vote`, { method: 'POST' }).catch(() => { toast('Vote failed.'); loadPitches(); });
+        else store.set('pitches', state.pitches);
+      }
+      return;
+    }
+    if (d.delpitch) {
+      try { await API.call(`/api/pitches/${d.delpitch}`, { method: 'DELETE' }); state.pitches = state.pitches.filter(p => p.id !== d.delpitch); render(); }
+      catch { toast('Could not delete that pitch.'); }
       return;
     }
     if (d.lb) { state.lb = d.lb; render(); return; }
@@ -579,10 +638,20 @@
     }
     if (t.id === 'sendPitch' && draft) {
       const g = gameById[draft.game];
+      if (LIVE) {
+        t.disabled = true; t.textContent = 'Sending…';
+        try {
+          const r = await API.call('/api/pitches', { method: 'POST', body: JSON.stringify({ appid: draft.game, to: draft.to, note: draft.note.trim() }) });
+          closeModal();
+          toast(r.posted ? `Pitched <b>${esc(g.name)}</b> in <b>#game-night</b>` : `Pitched <b>${esc(g.name)}</b>`);
+          state.pitchesLoaded = false; if (state.view === 'pitches') render();
+        } catch (err) { toast(esc((err.body && err.body.message) || 'Could not send that pitch.')); t.disabled = false; t.textContent = 'Send pitch'; }
+        return;
+      }
       state.pitches.unshift({ id: 'p' + Date.now(), game: draft.game, by: ME, to: draft.to, note: draft.note.trim(), votes: [ME], at: Date.now() });
-      store.set(LIVE ? 'pitches-live' : 'pitches', state.pitches);
+      store.set('pitches', state.pitches);
       closeModal();
-      toast(`Pitched <b>${esc(g.name)}</b> to <b>#game-pitches</b> (mock)`);
+      toast(`Pitched <b>${esc(g.name)}</b> to <b>#game-night</b> (mock)`);
       if (state.view === 'pitches') render();
       return;
     }
@@ -605,7 +674,22 @@
     if (e.target.dataset.cmp !== undefined) { state.cmp[+e.target.dataset.cmp] = e.target.value; render(); }
   });
   document.addEventListener('input', e => {
-    if (e.target.id === 'q') { state.query = e.target.value; $('#results').innerHTML = resultsHtml(); }
+    if (e.target.id === 'q') {
+      state.query = e.target.value; $('#results').innerHTML = resultsHtml();
+      const q = state.query.trim().toLowerCase();
+      if (LIVE && q.length >= 2) {
+        clearTimeout(searchT);
+        searchT = setTimeout(async () => {
+          const seq = ++searchSeq;
+          try {
+            const r = await API.call('/api/search?q=' + encodeURIComponent(q));
+            if (seq !== searchSeq) return;
+            mergeGames(r.games); state.searchQ = q; state.searchIds = r.results;
+          } catch { state.searchQ = q; state.searchIds = []; }
+          if ($('#results') && state.query.trim().toLowerCase() === q) $('#results').innerHTML = resultsHtml();
+        }, 350);
+      }
+    }
     if (e.target.id === 'note' && draft) { draft.note = e.target.value; $('#dpreview').innerHTML = discordPreview(); }
   });
   document.addEventListener('keydown', e => {
@@ -617,7 +701,7 @@
 
   /* ---------- init ---------- */
   if (LIVE) {
-    $('.mockbar').textContent = 'BETA · DISCOVERY CHARTS, PITCHES & KEYSHOP PRICES STILL USE SAMPLE DATA';
+    $('.mockbar').textContent = 'BETA · KEYSHOP PRICES COMING SOON';
     const core = $('[data-crew=core]'); if (core) core.textContent = 'Just me';
   }
   $('#me').innerHTML = `${av(ME)}<div>${esc(crewById[ME].name)}<small>${LIVE ? '<button class="linkbtn" data-act="logout">Log out</button>' : 'Discord login (mock)'}</small></div>`;

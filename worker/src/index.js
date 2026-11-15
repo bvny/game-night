@@ -1,32 +1,40 @@
 // Burrito Gang · Game Night API (Cloudflare Worker)
 //
 // Bindings / settings (see SETUP.md):
-//   DB                      D1 database binding
-//   FRONTEND_URL            e.g. https://gaymers.burritogang.com
-//   DISCORD_CLIENT_ID       Discord application client ID
-//   DISCORD_CLIENT_SECRET   (secret) Discord application client secret
-//   DISCORD_GUILD_ID        Burrito Gang server ID
+//   DB                        D1 database binding
+//   FRONTEND_URL              e.g. https://gaymers.burritogang.com
+//   DISCORD_CLIENT_ID         Discord application client ID
+//   DISCORD_CLIENT_SECRET     (secret) Discord application client secret
+//   DISCORD_GUILD_ID          Burrito Gang server ID
 //   DISCORD_REQUIRED_ROLE_ID  optional: role needed to get in
-//   STEAM_API_KEY           (secret) from steamcommunity.com/dev/apikey
-//   SESSION_SECRET          (secret) long random string used to sign logins
-//   ALLOWED_ORIGINS         optional: comma-separated extra origins (e.g. local testing)
+//   DISCORD_WEBHOOK_URL       (secret) optional: webhook for the #game-night channel
+//   STEAM_API_KEY             (secret) from steamcommunity.com/dev/apikey
+//   SESSION_SECRET            (secret) long random string used to sign logins
+//   ALLOWED_ORIGINS           optional: comma-separated extra origins (e.g. local testing)
 
 const DISCORD_API = 'https://discord.com/api/v10';
 const STEAM_API = 'https://api.steampowered.com';
-const STORE_API = 'https://store.steampowered.com/api';
+const STORE = 'https://store.steampowered.com';
 const SESSION_DAYS = 30;
 const CC_LIST = ['ie', 'gb', 'us'];
+const CC_UPPER = { ie: 'IE', gb: 'GB', us: 'US' };
+const META_MAX_AGE = 3 * 86400e3;   // refresh store info every 3 days
+const CHART_MAX_AGE = 20 * 3600e3;  // refresh Discovery charts roughly daily
 
-// Steam store category IDs
-const COOP_CATS = new Set([9, 38, 39, 48]);              // Co-op, Online Co-op, Shared/Split Screen Co-op, LAN Co-op
-const PVP_CATS = new Set([49, 36, 37, 47]);              // PvP, Online PvP, Shared/Split Screen PvP, LAN PvP
-const MULTI_CATS = new Set([1, 9, 20, 24, 27, 36, 37, 38, 39, 47, 48, 49]);
+// Steam store category IDs + tag names used to decide co-op / PvP / multiplayer
+const COOP_CATS = new Set([9, 38, 39, 48]);
+const PVP_CATS = new Set([49, 36, 37, 47]);
+const MULTI_CATS = new Set([1, 9, 20, 24, 27, 36, 37, 38, 39, 44, 47, 48, 49]);
 const SHOW_CATS = new Set([1, 9, 24, 27, 36, 37, 38, 39, 47, 48, 49]);
+const COOP_TAGS = new Set(['Co-op', 'Online Co-Op', 'Local Co-Op', 'Co-op Campaign']);
+const PVP_TAGS = new Set(['PvP', 'Competitive', 'Battle Royale', 'MOBA', 'Team-Based', 'Hero Shooter', 'eSports', 'Arena Shooter']);
+const MULTI_TAGS = new Set(['Multiplayer', 'Massively Multiplayer', 'Local Multiplayer', 'Party Game', 'Party', '4 Player Local', 'Split Screen', 'Social Deduction', 'MMORPG']);
 
 export default {
   async fetch(req, env, ctx) {
     if (req.method === 'OPTIONS') return cors(req, env, new Response(null, { status: 204 }));
     try {
+      await ensureSchema(env);
       return cors(req, env, await route(req, env, ctx));
     } catch (e) {
       console.error(e);
@@ -34,9 +42,24 @@ export default {
     }
   },
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(hourly(env));
+    ctx.waitUntil(ensureSchema(env).then(() => hourly(env)));
   },
 };
+
+/* ------------------------------------------------------------------ schema (auto-upgrades) */
+
+let schemaReady = false;
+async function ensureSchema(env) {
+  if (schemaReady) return;
+  await env.DB.batch([
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS charts (kind TEXT NOT NULL, rank INTEGER NOT NULL, appid INTEGER NOT NULL, value INTEGER, fetched_at INTEGER, PRIMARY KEY (kind, rank))'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS pitches (id INTEGER PRIMARY KEY AUTOINCREMENT, appid INTEGER NOT NULL, by_user TEXT NOT NULL, to_users TEXT, note TEXT, created_at INTEGER NOT NULL)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS votes (pitch_id INTEGER NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY (pitch_id, user_id))'),
+  ]);
+  try { await env.DB.prepare('ALTER TABLE games ADD COLUMN description TEXT').run(); }
+  catch (e) { if (!/duplicate column/i.test(String(e && e.message || e))) throw e; }
+  schemaReady = true;
+}
 
 /* ------------------------------------------------------------------ routing */
 
@@ -44,27 +67,35 @@ async function route(req, env, ctx) {
   const url = new URL(req.url);
   const p = url.pathname.replace(/\/+$/, '') || '/';
 
-  if (p === '/') return json({ ok: true, name: 'burrito-game-night-api' });
+  if (p === '/') return json({ ok: true, name: 'burrito-game-night-api', version: 2 });
   if (p === '/auth/login') return authLogin(env, url);
   if (p === '/auth/callback') return authCallback(req, env, ctx, url);
 
   if (p.startsWith('/api/')) {
     const user = await authUser(req, env);
     if (!user) return json({ error: 'unauthorized' }, 401);
+    const M = req.method;
+    let m;
 
-    if (p === '/api/me' && req.method === 'GET') return json({ user: publicMe(user) });
-    if (p === '/api/crew' && req.method === 'GET') return crew(env);
-    if (p === '/api/steam/link' && req.method === 'POST') return steamLink(req, env, user);
-    if (p === '/api/steam/link' && req.method === 'DELETE') {
+    if (p === '/api/me' && M === 'GET') return json({ user: publicMe(user) });
+    if (p === '/api/crew' && M === 'GET') return crew(env, ctx);
+    if (p === '/api/discovery' && M === 'GET') return discovery(env);
+    if (p === '/api/search' && M === 'GET') return search(env, ctx, url);
+    if (p === '/api/steam/link' && M === 'POST') return steamLink(req, env, ctx, user);
+    if (p === '/api/steam/link' && M === 'DELETE') {
       await env.DB.batch([
         env.DB.prepare('UPDATE users SET steam_id=NULL, steam_private=0, game_count=0, last_sync=NULL WHERE id=?').bind(user.id),
         env.DB.prepare('DELETE FROM library WHERE user_id=?').bind(user.id),
       ]);
       return json({ user: publicMe(await getUser(env, user.id)) });
     }
-    if (p === '/api/steam/sync' && req.method === 'POST') return steamSyncMe(env, user);
-    const m = p.match(/^\/api\/game\/(\d+)$/);
-    if (m && req.method === 'GET') return gameDetails(env, ctx, +m[1], url.searchParams.get('cc') || 'ie');
+    if (p === '/api/steam/sync' && M === 'POST') return steamSyncMe(env, ctx, user);
+    if (p === '/api/pitches' && M === 'GET') return listPitches(env);
+    if (p === '/api/pitches' && M === 'POST') return createPitch(req, env, ctx, user);
+    if ((m = p.match(/^\/api\/pitches\/(\d+)\/vote$/)) && M === 'POST') return toggleVote(env, user, +m[1]);
+    if ((m = p.match(/^\/api\/pitches\/(\d+)$/)) && M === 'DELETE') return deletePitch(env, user, +m[1]);
+    if (p === '/api/announce' && M === 'POST') return announce(req, env, ctx, user);
+    if ((m = p.match(/^\/api\/game\/(\d+)$/)) && M === 'GET') return gameDetails(env, ctx, +m[1], url.searchParams.get('cc') || 'ie');
   }
   return json({ error: 'not_found' }, 404);
 }
@@ -92,12 +123,9 @@ function authLogin(env, url) {
 
 async function authCallback(req, env, ctx, url) {
   const front = env.FRONTEND_URL.replace(/\/$/, '');
-  const go = (hash, clear = true) => new Response(null, {
+  const go = hash => new Response(null, {
     status: 302,
-    headers: {
-      Location: `${front}/#${hash}`,
-      ...(clear ? { 'Set-Cookie': 'bg_state=; Path=/auth; Max-Age=0; HttpOnly; Secure; SameSite=Lax' } : {}),
-    },
+    headers: { Location: `${front}/#${hash}`, 'Set-Cookie': 'bg_state=; Path=/auth; Max-Age=0; HttpOnly; Secure; SameSite=Lax' },
   });
   const fail = reason => go(`auth_error=${reason}`);
 
@@ -105,7 +133,6 @@ async function authCallback(req, env, ctx, url) {
   const state = url.searchParams.get('state');
   if (!state || state !== getCookie(req, 'bg_state')) return fail('state');
 
-  // 1. swap the code for an access token
   const tokRes = await fetch(`${DISCORD_API}/oauth2/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -121,7 +148,6 @@ async function authCallback(req, env, ctx, url) {
   const { access_token } = await tokRes.json();
   const auth = { headers: { Authorization: `Bearer ${access_token}` } };
 
-  // 2. who are they, are they in the server, have they linked Steam on Discord?
   const [uRes, mRes, cRes] = await Promise.all([
     fetch(`${DISCORD_API}/users/@me`, auth),
     fetch(`${DISCORD_API}/users/@me/guilds/${env.DISCORD_GUILD_ID}/member`, auth),
@@ -141,7 +167,6 @@ async function authCallback(req, env, ctx, url) {
   const avatar = du.avatar ? `https://cdn.discordapp.com/avatars/${du.id}/${du.avatar}.png?size=64` : null;
   const now = Date.now();
 
-  // 3. save them (auto-link Steam from their Discord connection if it's not taken)
   let autoSteam = null;
   if (steamConn) {
     const taken = await env.DB.prepare('SELECT id FROM users WHERE steam_id=? AND id!=?').bind(steamConn.id, du.id).first();
@@ -154,9 +179,8 @@ async function authCallback(req, env, ctx, url) {
   ).bind(du.id, name, avatar, autoSteam, now, now).run();
 
   const user = await getUser(env, du.id);
-  if (user.steam_id && !user.last_sync) ctx.waitUntil(syncSteam(env, user).catch(e => console.error('first sync', e)));
+  if (user.steam_id && !user.last_sync) ctx.waitUntil(syncSteam(env, user).then(() => fillLibraryMeta(env)).catch(e => console.error('first sync', e)));
 
-  // 4. hand the browser a signed login token
   const token = await signToken(env, { uid: du.id, exp: Math.floor(now / 1000) + SESSION_DAYS * 86400 });
   return go(`auth=${token}`);
 }
@@ -174,7 +198,7 @@ const publicMe = u => ({
   steam_private: !!u.steam_private, game_count: u.game_count || 0, last_sync: u.last_sync || null,
 });
 
-/* ------------------------------------------------------------------ steam */
+/* ------------------------------------------------------------------ steam library */
 
 async function resolveSteamId(env, input) {
   if (!input) return null;
@@ -189,7 +213,7 @@ async function resolveSteamId(env, input) {
   return d && d.response && d.response.success === 1 ? d.response.steamid : null;
 }
 
-async function steamLink(req, env, user) {
+async function steamLink(req, env, ctx, user) {
   const body = await req.json().catch(() => ({}));
   const sid = await resolveSteamId(env, String(body.input || '').trim());
   if (!sid) return json({ error: 'steam_not_found', message: "Couldn't find that Steam profile. Try your full profile link." }, 400);
@@ -197,15 +221,17 @@ async function steamLink(req, env, user) {
   if (taken) return json({ error: 'steam_taken', message: 'That Steam account is already linked to someone else.' }, 409);
   await env.DB.prepare('UPDATE users SET steam_id=?, steam_private=0, last_sync=NULL WHERE id=?').bind(sid, user.id).run();
   const sync = await syncSteam(env, { ...user, steam_id: sid });
+  ctx.waitUntil(fillLibraryMeta(env).catch(e => console.error('meta after link', e)));
   return json({ user: publicMe(await getUser(env, user.id)), sync });
 }
 
-async function steamSyncMe(env, user) {
+async function steamSyncMe(env, ctx, user) {
   if (!user.steam_id) return json({ error: 'no_steam', message: 'Link your Steam account first.' }, 400);
   if (user.last_sync && Date.now() - user.last_sync < 60_000 && !user.steam_private) {
     return json({ user: publicMe(user), sync: { skipped: true } });
   }
   const sync = await syncSteam(env, user);
+  ctx.waitUntil(fillLibraryMeta(env).catch(e => console.error('meta after sync', e)));
   return json({ user: publicMe(await getUser(env, user.id)), sync });
 }
 
@@ -216,7 +242,6 @@ async function syncSteam(env, user) {
   const games = d && d.response && d.response.games;
   const now = Date.now();
 
-  // Private "Game details" -> Steam returns an empty response
   if (!Array.isArray(games)) {
     await env.DB.prepare('UPDATE users SET steam_private=1, last_sync=? WHERE id=?').bind(now, user.id).run();
     return { private: true, count: 0 };
@@ -226,7 +251,7 @@ async function syncSteam(env, user) {
   const ins = env.DB.prepare('INSERT INTO library (user_id, appid, minutes, minutes_2w) VALUES (?, ?, ?, ?)');
   const gIns = env.DB.prepare(
     `INSERT INTO games (appid, name) VALUES (?, ?)
-     ON CONFLICT(appid) DO UPDATE SET name=excluded.name WHERE games.name IS NOT excluded.name`
+     ON CONFLICT(appid) DO UPDATE SET name=excluded.name WHERE games.name IS NULL`
   );
   let total = 0, total2w = 0;
   for (const g of games) {
@@ -242,32 +267,338 @@ async function syncSteam(env, user) {
   return { private: false, count: games.length };
 }
 
-/* ------------------------------------------------------------------ crew data */
+/* ------------------------------------------------------------------ store info (bulk, via IStoreBrowseService/GetItems) */
 
-async function crew(env) {
-  const [users, lib, games] = await Promise.all([
+async function tagNames() {
+  const cache = caches.default;
+  const key = new Request('https://cache.burrito.local/steam-tags');
+  const hit = await cache.match(key);
+  if (hit) return hit.json();
+  const r = await fetch(`${STEAM_API}/IStoreService/GetTagList/v1/?language=english`);
+  if (!r.ok) return {};
+  const d = await r.json();
+  const map = {};
+  for (const t of (d.response && d.response.tags) || []) map[t.tagid] = t.name;
+  await cache.put(key, new Response(JSON.stringify(map), { headers: { 'Cache-Control': 'public, max-age=86400' } }));
+  return map;
+}
+
+async function getItems(appids, cc, full) {
+  const input = {
+    ids: appids.map(appid => ({ appid })),
+    context: { language: 'english', country_code: CC_UPPER[cc], steam_realm: 1 },
+    data_request: full ? { include_basic_info: true, include_tag_count: 12 } : {},
+  };
+  const r = await fetch(`${STEAM_API}/IStoreBrowseService/GetItems/v1/?input_json=${encodeURIComponent(JSON.stringify(input))}`);
+  if (!r.ok) throw new Error('GetItems ' + r.status);
+  const d = await r.json();
+  return (d.response && d.response.store_items) || [];
+}
+
+function priceOf(it) {
+  const bp = it && it.best_purchase_option;
+  if (!bp || bp.final_price_in_cents == null) return null;
+  const final = +bp.final_price_in_cents;
+  return { final, initial: +(bp.original_price_in_cents || final), discount: bp.discount_pct || 0 };
+}
+
+function parseItem(it, names) {
+  const c = it.categories || {};
+  const cats = [...(c.supported_player_categoryids || []), ...(c.feature_categoryids || [])];
+  const tags = (it.tags && it.tags.length ? it.tags : (it.tagids || []).map(tagid => ({ tagid, weight: 0 })))
+    .slice().sort((a, b) => (b.weight || 0) - (a.weight || 0))
+    .map(t => names[t.tagid]).filter(Boolean);
+  const has = set => tags.some(t => set.has(t));
+  const coop = cats.some(x => COOP_CATS.has(x)) || has(COOP_TAGS);
+  const pvp = cats.some(x => PVP_CATS.has(x)) || has(PVP_TAGS);
+  const multi = coop || pvp || cats.some(x => MULTI_CATS.has(x)) || has(MULTI_TAGS);
+  return {
+    appid: it.appid || it.id, name: it.name || null, is_free: !!it.is_free, coop, pvp, multi,
+    tags: tags.slice(0, 6), description: cleanText(it.basic_info && it.basic_info.short_description),
+  };
+}
+
+// Fetch store info + IE/GB/US prices for up to `limit` appids, 100 per request.
+async function refreshMeta(env, appids) {
+  if (!appids.length) return 0;
+  const names = await tagNames();
+  const now = Date.now();
+  let done = 0;
+  for (let i = 0; i < appids.length; i += 100) {
+    const chunk = appids.slice(i, i + 100);
+    const [ie, gb, us] = await Promise.all([getItems(chunk, 'ie', true), getItems(chunk, 'gb', false), getItems(chunk, 'us', false)]);
+    const byId = list => Object.fromEntries(list.map(x => [x.appid || x.id, x]));
+    const G = byId(gb), U = byId(us), seen = new Set();
+    const stmts = [];
+    for (const it of ie) {
+      const id = it.appid || it.id;
+      seen.add(id);
+      if (it.success !== 1 || !it.name) {
+        stmts.push(env.DB.prepare('INSERT INTO games (appid, meta_at) VALUES (?, ?) ON CONFLICT(appid) DO UPDATE SET meta_at=excluded.meta_at').bind(id, now));
+        continue;
+      }
+      const g = parseItem(it, names);
+      const prices = { ie: priceOf(it), gb: priceOf(G[id]), us: priceOf(U[id]) };
+      stmts.push(env.DB.prepare(
+        `INSERT INTO games (appid, name, is_free, coop, pvp, multi, genres, description, prices, meta_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(appid) DO UPDATE SET name=excluded.name, is_free=excluded.is_free, coop=excluded.coop, pvp=excluded.pvp,
+           multi=excluded.multi, genres=excluded.genres, description=excluded.description, prices=excluded.prices, meta_at=excluded.meta_at`
+      ).bind(id, g.name, g.is_free ? 1 : 0, g.coop ? 1 : 0, g.pvp ? 1 : 0, g.multi ? 1 : 0, JSON.stringify(g.tags), g.description, JSON.stringify(prices), now));
+      done++;
+    }
+    for (const id of chunk) if (!seen.has(id)) {
+      stmts.push(env.DB.prepare('INSERT INTO games (appid, meta_at) VALUES (?, ?) ON CONFLICT(appid) DO UPDATE SET meta_at=excluded.meta_at').bind(id, now));
+    }
+    if (stmts.length) await env.DB.batch(stmts);
+  }
+  return done;
+}
+
+// Library games with missing/old info, most-owned first.
+async function fillLibraryMeta(env, limit = 600) {
+  const need = (await env.DB.prepare(
+    `SELECT l.appid, COUNT(*) AS owners FROM library l LEFT JOIN games g ON g.appid = l.appid
+     WHERE g.meta_at IS NULL OR g.meta_at < ? GROUP BY l.appid ORDER BY owners DESC LIMIT ?`
+  ).bind(Date.now() - META_MAX_AGE, limit).all()).results.map(r => r.appid);
+  return refreshMeta(env, need);
+}
+
+/* ------------------------------------------------------------------ discovery charts */
+
+async function storeSearchList(query) {
+  const r = await fetch(`${STORE}/search/results/?${query}&json=1&count=100&cc=ie&l=english&category1=998`);
+  if (!r.ok) return [];
+  const d = await r.json().catch(() => ({}));
+  const out = [], seen = new Set();
+  for (const it of d.items || []) {
+    const m = String(it.logo || '').match(/\/steam\/apps\/(\d+)\//);
+    if (m && !seen.has(+m[1])) { seen.add(+m[1]); out.push({ appid: +m[1], value: null }); }
+  }
+  return out;
+}
+
+async function refreshCharts(env) {
+  const now = Date.now();
+  const lists = {};
+  try {
+    const r = await fetch(`${STEAM_API}/ISteamChartsService/GetMostPlayedGames/v1/`);
+    const d = r.ok ? await r.json() : {};
+    lists.played = ((d.response && d.response.ranks) || []).map(x => ({ appid: x.appid, value: x.peak_in_game }));
+  } catch (e) { console.error('most played', e); }
+  for (const [kind, q] of [['seller', 'filter=topsellers'], ['popularnew', 'filter=popularnew'], ['sale', 'specials=1&filter=topsellers']]) {
+    try { lists[kind] = await storeSearchList(q); } catch (e) { console.error('chart', kind, e); }
+  }
+  const stmts = [];
+  const all = new Set();
+  for (const [kind, rows] of Object.entries(lists)) {
+    if (!rows || !rows.length) continue; // keep yesterday's list if a fetch failed
+    stmts.push(env.DB.prepare('DELETE FROM charts WHERE kind=?').bind(kind));
+    rows.slice(0, 100).forEach((row, i) => {
+      all.add(row.appid);
+      stmts.push(env.DB.prepare('INSERT INTO charts (kind, rank, appid, value, fetched_at) VALUES (?, ?, ?, ?, ?)').bind(kind, i + 1, row.appid, row.value, now));
+    });
+  }
+  if (stmts.length) await env.DB.batch(stmts);
+  const stale = (await env.DB.prepare(
+    'SELECT DISTINCT c.appid FROM charts c LEFT JOIN games g ON g.appid = c.appid WHERE g.meta_at IS NULL OR g.meta_at < ?'
+  ).bind(now - 86400e3).all()).results.map(r => r.appid);
+  await refreshMeta(env, stale);
+}
+
+async function discovery(env) {
+  let rows = (await env.DB.prepare('SELECT kind, rank, appid, value, fetched_at FROM charts ORDER BY kind, rank').all()).results;
+  if (!rows.length) {
+    await refreshCharts(env);
+    rows = (await env.DB.prepare('SELECT kind, rank, appid, value, fetched_at FROM charts ORDER BY kind, rank').all()).results;
+  }
+  const games = (await env.DB.prepare('SELECT * FROM games WHERE appid IN (SELECT appid FROM charts)').all()).results;
+  const charts = {};
+  for (const r of rows) (charts[r.kind] = charts[r.kind] || []).push({ appid: r.appid, rank: r.rank, value: r.value });
+  return json({
+    charts,
+    games: Object.fromEntries(games.filter(g => g.name).map(g => [g.appid, shapeGame(g, true)])),
+    updated: rows.reduce((a, r) => Math.max(a, r.fetched_at || 0), 0),
+  });
+}
+
+/* ------------------------------------------------------------------ crew + search */
+
+function shapeGame(g, withDesc) {
+  return {
+    name: g.name, is_free: !!g.is_free, coop: !!g.coop, pvp: !!g.pvp, multi: !!g.multi,
+    max_players: g.max_players, tags: g.genres ? JSON.parse(g.genres) : [],
+    prices: g.prices ? JSON.parse(g.prices) : null, meta_at: g.meta_at,
+    ...(withDesc ? { description: g.description || '' } : {}),
+  };
+}
+
+let lastLazyFill = 0;
+async function crew(env, ctx) {
+  const [users, lib, games, missing] = await Promise.all([
     env.DB.prepare('SELECT id, name, avatar, steam_id, steam_private, game_count, last_sync FROM users ORDER BY name COLLATE NOCASE').all(),
     env.DB.prepare('SELECT user_id, appid, minutes, minutes_2w FROM library').all(),
     env.DB.prepare('SELECT * FROM games WHERE appid IN (SELECT DISTINCT appid FROM library)').all(),
+    env.DB.prepare('SELECT COUNT(*) AS n FROM games g WHERE g.meta_at IS NULL AND g.appid IN (SELECT appid FROM library)').first(),
   ]);
+  // Libraries synced before this version have no store info yet: fill it in the background.
+  if (missing && missing.n > 0 && Date.now() - lastLazyFill > 60_000) {
+    lastLazyFill = Date.now();
+    ctx.waitUntil(fillLibraryMeta(env).catch(e => console.error('lazy meta', e)));
+  }
   const library = {};
   for (const r of lib.results) (library[r.user_id] = library[r.user_id] || {})[r.appid] = [r.minutes, r.minutes_2w];
-  const out = {};
-  for (const g of games.results) {
-    out[g.appid] = {
-      name: g.name, is_free: !!g.is_free, coop: !!g.coop, pvp: !!g.pvp, multi: !!g.multi,
-      max_players: g.max_players, genres: g.genres ? JSON.parse(g.genres) : [],
-      prices: g.prices ? JSON.parse(g.prices) : null, meta_at: g.meta_at,
-    };
-  }
   return json({
     users: users.results.map(u => ({
       id: u.id, name: u.name, avatar: u.avatar, steam_id: !!u.steam_id,
       steam_private: !!u.steam_private, game_count: u.game_count, last_sync: u.last_sync,
     })),
     library,
-    games: out,
+    games: Object.fromEntries(games.results.map(g => [g.appid, shapeGame(g, false)])),
+    pending_info: missing ? missing.n : 0,
   });
+}
+
+async function search(env, ctx, url) {
+  const q = (url.searchParams.get('q') || '').trim().slice(0, 80);
+  if (q.length < 2) return json({ results: [] });
+  const cache = caches.default;
+  const key = new Request(`https://cache.burrito.local/search/${encodeURIComponent(q.toLowerCase())}`);
+  let items = null;
+  const hit = await cache.match(key);
+  if (hit) items = await hit.json();
+  else {
+    const r = await fetch(`${STORE}/api/storesearch/?term=${encodeURIComponent(q)}&cc=ie&l=english`);
+    const d = r.ok ? await r.json() : {};
+    items = (d.items || []).filter(x => x.type === 'app').map(x => ({ appid: x.id, name: x.name }));
+    ctx.waitUntil(cache.put(key, new Response(JSON.stringify(items), { headers: { 'Cache-Control': 'public, max-age=3600' } })));
+  }
+  const ids = items.map(x => x.appid);
+  const known = {};
+  for (const id of ids) {
+    const g = await env.DB.prepare('SELECT * FROM games WHERE appid=?').bind(id).first();
+    if (g && g.name && g.meta_at) known[id] = shapeGame(g, true);
+  }
+  const unknown = ids.filter(id => !known[id]);
+  if (unknown.length) {
+    await refreshMeta(env, unknown);
+    for (const id of unknown) {
+      const g = await env.DB.prepare('SELECT * FROM games WHERE appid=?').bind(id).first();
+      if (g && g.name) known[id] = shapeGame(g, true);
+    }
+  }
+  return json({ results: items.filter(x => known[x.appid]).map(x => x.appid), games: known });
+}
+
+/* ------------------------------------------------------------------ pitches + Discord */
+
+async function listPitches(env) {
+  const [p, v, g] = await Promise.all([
+    env.DB.prepare('SELECT * FROM pitches ORDER BY created_at DESC LIMIT 200').all(),
+    env.DB.prepare('SELECT pitch_id, user_id FROM votes').all(),
+    env.DB.prepare('SELECT * FROM games WHERE appid IN (SELECT appid FROM pitches)').all(),
+  ]);
+  const votes = {};
+  for (const x of v.results) (votes[x.pitch_id] = votes[x.pitch_id] || []).push(x.user_id);
+  return json({
+    pitches: p.results.map(x => ({
+      id: String(x.id), game: x.appid, by: x.by_user, to: JSON.parse(x.to_users || '[]'),
+      note: x.note || '', at: x.created_at, votes: votes[x.id] || [],
+    })),
+    games: Object.fromEntries(g.results.filter(x => x.name).map(x => [x.appid, shapeGame(x, true)])),
+  });
+}
+
+async function createPitch(req, env, ctx, user) {
+  const b = await req.json().catch(() => ({}));
+  const appid = parseInt(b.appid, 10);
+  if (!appid) return json({ error: 'bad_request', message: 'Missing game.' }, 400);
+  const note = String(b.note || '').trim().slice(0, 300);
+  const to = (Array.isArray(b.to) ? b.to : []).map(String).filter(x => /^\d{1,25}$/.test(x)).slice(0, 25);
+
+  let game = await env.DB.prepare('SELECT * FROM games WHERE appid=?').bind(appid).first();
+  if (!game || !game.meta_at) { await refreshMeta(env, [appid]); game = await env.DB.prepare('SELECT * FROM games WHERE appid=?').bind(appid).first(); }
+  if (!game || !game.name) return json({ error: 'unknown_game', message: "Couldn't find that game on Steam." }, 400);
+
+  const row = await env.DB.prepare('INSERT INTO pitches (appid, by_user, to_users, note, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id')
+    .bind(appid, user.id, JSON.stringify(to), note, Date.now()).first();
+  await env.DB.prepare('INSERT OR IGNORE INTO votes (pitch_id, user_id) VALUES (?, ?)').bind(row.id, user.id).run();
+
+  const owners = (await env.DB.prepare('SELECT COUNT(*) AS n FROM library WHERE appid=?').bind(appid).first()).n;
+  const total = (await env.DB.prepare('SELECT COUNT(*) AS n FROM users').first()).n;
+  ctx.waitUntil(postWebhook(env, pitchMessage(env, user, game, to, note, owners, total)));
+  return json({ ok: true, id: String(row.id), posted: !!env.DISCORD_WEBHOOK_URL });
+}
+
+async function toggleVote(env, user, id) {
+  const exists = await env.DB.prepare('SELECT 1 AS x FROM votes WHERE pitch_id=? AND user_id=?').bind(id, user.id).first();
+  if (exists) await env.DB.prepare('DELETE FROM votes WHERE pitch_id=? AND user_id=?').bind(id, user.id).run();
+  else {
+    const p = await env.DB.prepare('SELECT id FROM pitches WHERE id=?').bind(id).first();
+    if (!p) return json({ error: 'not_found' }, 404);
+    await env.DB.prepare('INSERT INTO votes (pitch_id, user_id) VALUES (?, ?)').bind(id, user.id).run();
+  }
+  return json({ ok: true, voted: !exists });
+}
+
+async function deletePitch(env, user, id) {
+  const p = await env.DB.prepare('SELECT by_user FROM pitches WHERE id=?').bind(id).first();
+  if (!p) return json({ error: 'not_found' }, 404);
+  if (p.by_user !== user.id) return json({ error: 'forbidden', message: 'You can only delete your own pitches.' }, 403);
+  await env.DB.batch([env.DB.prepare('DELETE FROM votes WHERE pitch_id=?').bind(id), env.DB.prepare('DELETE FROM pitches WHERE id=?').bind(id)]);
+  return json({ ok: true });
+}
+
+async function announce(req, env, ctx, user) {
+  const b = await req.json().catch(() => ({}));
+  const appid = parseInt(b.appid, 10);
+  const game = appid && await env.DB.prepare('SELECT * FROM games WHERE appid=?').bind(appid).first();
+  if (!game || !game.name) return json({ error: 'unknown_game' }, 400);
+  const ids = (Array.isArray(b.players) ? b.players : []).map(String).filter(x => /^\d{1,25}$/.test(x)).slice(0, 30);
+  const names = [];
+  for (const id of ids) { const u = await env.DB.prepare('SELECT name FROM users WHERE id=?').bind(id).first(); if (u) names.push(u.name); }
+  ctx.waitUntil(postWebhook(env, {
+    username: 'Game Night',
+    content: `🎲 **${esc(user.name)}** rolled tonight's game: **${esc(game.name)}**`,
+    allowed_mentions: { parse: [] },
+    embeds: [{
+      title: game.name, url: `${STORE}/app/${appid}/`, color: 0xF2B532,
+      description: cleanText(game.description || '').slice(0, 300) || undefined,
+      image: { url: `https://cdn.cloudflare.steamstatic.com/steam/apps/${appid}/header.jpg` },
+      fields: names.length ? [{ name: "Who's on", value: names.join(', ').slice(0, 1000) }] : undefined,
+      footer: { text: (env.FRONTEND_URL || '').replace(/^https?:\/\//, '') },
+    }],
+  }));
+  return json({ ok: true, posted: !!env.DISCORD_WEBHOOK_URL });
+}
+
+function pitchMessage(env, user, game, to, note, owners, total) {
+  const prices = game.prices ? JSON.parse(game.prices) : {};
+  const fmt = (p, sym) => p ? `${sym}${(p.final / 100).toFixed(2)}${p.discount ? ` (-${p.discount}%)` : ''}` : null;
+  const priceText = game.is_free ? 'Free' : [fmt(prices.ie, '€'), fmt(prices.gb, '£'), fmt(prices.us, '$')].filter(Boolean).join(' · ') || '—';
+  return {
+    username: 'Game Night',
+    content: `${to.map(id => `<@${id}>`).join(' ')} **${esc(user.name)}** pitched a game 👀`.trim(),
+    allowed_mentions: { users: to },
+    embeds: [{
+      author: { name: user.name, icon_url: user.avatar || undefined },
+      title: game.name, url: `${STORE}/app/${game.appid}/`, color: 0xC8321F,
+      description: note || cleanText(game.description || '').slice(0, 300) || undefined,
+      image: { url: `https://cdn.cloudflare.steamstatic.com/steam/apps/${game.appid}/header.jpg` },
+      fields: [
+        { name: 'Steam price', value: priceText, inline: true },
+        { name: 'Crew owns it', value: `${owners}/${total}`, inline: true },
+      ],
+      footer: { text: `Vote on ${(env.FRONTEND_URL || '').replace(/^https?:\/\//, '')}` },
+    }],
+  };
+}
+
+async function postWebhook(env, payload) {
+  if (!env.DISCORD_WEBHOOK_URL) return;
+  try {
+    const r = await fetch(env.DISCORD_WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (!r.ok) console.error('webhook', r.status, await r.text());
+  } catch (e) { console.error('webhook', e); }
 }
 
 /* ------------------------------------------------------------------ game details (trailer, description) */
@@ -279,22 +610,21 @@ async function gameDetails(env, ctx, appid, cc) {
   const hit = await cache.match(key);
   if (hit) return hit;
 
-  const r = await fetch(`${STORE_API}/appdetails?appids=${appid}&cc=${cc}&l=english`);
+  const r = await fetch(`${STORE}/api/appdetails?appids=${appid}&cc=${cc}&l=english`);
   if (!r.ok) return json({ error: 'store_error' }, 502);
   const entry = (await r.json())[appid];
   if (!entry || !entry.success) return json({ error: 'not_found' }, 404);
 
-  const a = entry.data;
-  ctx.waitUntil(saveMeta(env, appid, a, cc).catch(e => console.error('saveMeta', e)));
-  const res = json(shapeDetails(appid, a), 200, { 'Cache-Control': 'public, max-age=43200' });
+  const known = await env.DB.prepare('SELECT meta_at FROM games WHERE appid=?').bind(appid).first();
+  if (!known || !known.meta_at) ctx.waitUntil(refreshMeta(env, [appid]).catch(e => console.error('meta on details', e)));
+  const res = json(shapeDetails(appid, entry.data), 200, { 'Cache-Control': 'public, max-age=43200' });
   ctx.waitUntil(cache.put(key, res.clone()));
   return res;
 }
 
 function shapeDetails(appid, a) {
   return {
-    appid,
-    name: a.name,
+    appid, name: a.name,
     description: cleanText(a.short_description),
     header: a.header_image,
     genres: (a.genres || []).map(g => g.description),
@@ -324,49 +654,12 @@ function pickMovie(movies) {
   };
 }
 
-async function saveMeta(env, appid, a, cc) {
-  const cats = (a.categories || []).map(c => c.id);
-  const coop = cats.some(c => COOP_CATS.has(c));
-  const pvp = cats.some(c => PVP_CATS.has(c));
-  const multi = cats.some(c => MULTI_CATS.has(c));
-  const row = await env.DB.prepare('SELECT prices FROM games WHERE appid=?').bind(appid).first();
-  const prices = row && row.prices ? JSON.parse(row.prices) : {};
-  if (a.price_overview) prices[cc] = { final: a.price_overview.final, initial: a.price_overview.initial, discount: a.price_overview.discount_percent };
-  await env.DB.prepare(
-    `INSERT INTO games (appid, name, is_free, coop, pvp, multi, genres, prices, meta_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(appid) DO UPDATE SET name=excluded.name, is_free=excluded.is_free, coop=excluded.coop, pvp=excluded.pvp,
-       multi=excluded.multi, genres=excluded.genres, prices=excluded.prices, meta_at=excluded.meta_at`
-  ).bind(
-    appid, a.name || null, a.is_free ? 1 : 0, coop ? 1 : 0, pvp ? 1 : 0, multi ? 1 : 0,
-    JSON.stringify((a.genres || []).map(g => g.description).slice(0, 4)), JSON.stringify(prices), Date.now()
-  ).run();
-}
-
-async function fillPrices(env, ids, cc) {
-  if (!ids.length) return;
-  const r = await fetch(`${STORE_API}/appdetails?appids=${ids.join(',')}&cc=${cc}&filters=price_overview`);
-  if (!r.ok) return;
-  const d = await r.json();
-  const rows = (await env.DB.prepare(`SELECT appid, prices FROM games WHERE appid IN (${ids.map(() => '?').join(',')})`).bind(...ids).all()).results;
-  const stmts = [];
-  for (const row of rows) {
-    const e = d[row.appid];
-    if (!e) continue;
-    const po = e.success && e.data && e.data.price_overview;
-    const prices = row.prices ? JSON.parse(row.prices) : {};
-    // null = "not sold in this region", so we don't keep re-asking
-    prices[cc] = po ? { final: po.final, initial: po.initial, discount: po.discount_percent } : null;
-    stmts.push(env.DB.prepare('UPDATE games SET prices=? WHERE appid=?').bind(JSON.stringify(prices), row.appid));
-  }
-  if (stmts.length) await env.DB.batch(stmts);
-}
-
 /* ------------------------------------------------------------------ hourly job */
 
 async function hourly(env) {
   const now = Date.now();
 
-  // 1. Re-sync libraries older than 20 hours (a few per run, keeps us inside free-plan limits)
+  // 1. Re-sync libraries older than 20 hours (a few per run, inside free-plan limits)
   const stale = (await env.DB.prepare(
     'SELECT * FROM users WHERE steam_id IS NOT NULL AND (last_sync IS NULL OR last_sync < ?) ORDER BY last_sync LIMIT 4'
   ).bind(now - 20 * 3600e3).all()).results;
@@ -374,31 +667,13 @@ async function hourly(env) {
     try { await syncSteam(env, u); } catch (e) { console.error('sync', u.id, e); }
   }
 
-  // 2. Fill in store info (co-op/PvP, genres, prices), games owned by the most people first
-  const need = (await env.DB.prepare(
-    `SELECT l.appid, COUNT(*) AS owners FROM library l LEFT JOIN games g ON g.appid = l.appid
-     WHERE g.meta_at IS NULL OR g.meta_at < ?
-     GROUP BY l.appid ORDER BY owners DESC LIMIT 12`
-  ).bind(now - 7 * 86400e3).all()).results;
-  for (const { appid } of need) {
-    try {
-      const r = await fetch(`${STORE_API}/appdetails?appids=${appid}&cc=ie&l=english`);
-      if (r.status === 429) break; // store rate limit: try again next hour
-      const e = (await r.json())[appid];
-      if (e && e.success) await saveMeta(env, appid, e.data, 'ie');
-      else await env.DB.prepare('UPDATE games SET meta_at=? WHERE appid=?').bind(now, appid).run();
-    } catch (err) { console.error('meta', appid, err); }
-  }
+  // 2. Store info for library games (300 per run = 9 requests)
+  try { await fillLibraryMeta(env, 300); } catch (e) { console.error('library meta', e); }
 
-  // 3. Prices for any region we don't have yet (one batched request per region)
-  for (const cc of CC_LIST) {
-    try {
-      const missing = (await env.DB.prepare(
-        `SELECT appid FROM games WHERE is_free = 0 AND meta_at IS NOT NULL AND (prices IS NULL OR prices NOT LIKE ?)
-           AND appid IN (SELECT appid FROM library) LIMIT 40`
-      ).bind(`%"${cc}"%`).all()).results.map(x => x.appid);
-      await fillPrices(env, missing, cc);
-    } catch (err) { console.error('prices', cc, err); }
+  // 3. Discovery charts, once a day
+  const last = await env.DB.prepare('SELECT MAX(fetched_at) AS t FROM charts').first();
+  if (!last || !last.t || now - last.t > CHART_MAX_AGE) {
+    try { await refreshCharts(env); } catch (e) { console.error('charts', e); }
   }
 }
 
@@ -433,8 +708,11 @@ function cleanText(s) {
     .replace(/<[^>]+>/g, '')
     .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
-    .trim();
+    .replace(/\s+/g, ' ').trim();
 }
+
+// Escape Discord markdown in names
+const esc = s => String(s || '').replace(/([*_~`|>\\])/g, '\\$1');
 
 // --- signed login tokens (HMAC-SHA256) ---
 const enc = new TextEncoder();
@@ -458,4 +736,3 @@ async function verifyToken(env, token) {
     return p.exp > Date.now() / 1000 ? p : null;
   } catch { return null; }
 }
-
