@@ -1,0 +1,22 @@
+# Only needed if you deploy with the Wrangler CLI. The dashboard route in SETUP.md doesn't use this file.
+name = "burrito-game-night-api"
+main = "src/index.js"
+compatibility_date = "2025-10-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "burrito-game-night"
+database_id = "PASTE-YOUR-D1-DATABASE-ID"
+
+[triggers]
+crons = ["17 * * * *"]   # hourly: resync stale libraries + fill game info
+
+[vars]
+FRONTEND_URL = "https://gaymers.burritogang.com"
+DISCORD_GUILD_ID = "PASTE-YOUR-SERVER-ID"
+DISCORD_CLIENT_ID = "PASTE-YOUR-DISCORD-CLIENT-ID"
+# DISCORD_REQUIRED_ROLE_ID = ""        # optional: only let people with this role in
+# ALLOWED_ORIGINS = "http://localhost:8080"   # optional: extra sites allowed to call the API
+
+# Secrets (set with `wrangler secret put NAME` or in the dashboard):
+#   DISCORD_CLIENT_SECRET, STEAM_API_KEY, SESSION_SECRET
