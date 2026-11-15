@@ -303,13 +303,19 @@
   }
 
   function lastPlayedHtml(g) {
-    const owners = CREW.filter(c => LIB[c.id] && LIB[c.id][g.id]).map(c => ({ c, lp: LIB[c.id][g.id].lp || null, h: LIB[c.id][g.id].h || 0, on: state.on.has(c.id) }))
-      .sort((a, b) => (b.on - a.on) || ((b.lp || 0) - (a.lp || 0)) || (b.h - a.h)).slice(0, 8);
-    if (!owners.length) return '';
-    // No date but has playtime = played, date not synced yet (libraries synced before this feature)
-    const when = o => o.lp ? since(o.lp) : o.h ? `${fmt(o.h)}h played` : 'never';
-    return `<div class="lp"><span class="label">Last played</span><div class="lp-list">${owners.map(o =>
-      `<span class="lp-item ${o.lp && Date.now() - o.lp < 7 * 864e5 ? 'fresh' : !o.lp && !o.h ? 'never' : ''}" ${!o.lp && o.h ? 'title="Last-played date arrives on their next Steam sync"' : ''}>${av(o.c.id, 'sm')} ${esc(o.c.name)} <b>${when(o)}</b></span>`).join('')}</div></div>`;
+    // Everyone ticked tonight: do they own it, and when did they last play?
+    const tonight = people().map(id => {
+      const c = crewById[id], e = LIB[id] && LIB[id][g.id];
+      if (c.private) return { c, cls: 'unknown', txt: c.unlinked ? 'no Steam linked' : 'Steam private' };
+      if (!e) return { c, cls: 'missing', txt: g.f2p ? 'free to grab' : 'doesn’t own it' };
+      const when = e.lp ? `played ${since(e.lp)}` : e.h ? `owns · ${fmt(e.h)}h played` : 'owns · never played';
+      return { c, cls: e.lp && Date.now() - e.lp < 7 * 864e5 ? 'fresh' : e.h || e.lp ? 'owns' : 'never', txt: `✓ ${when}`, lp: e.lp || 0 };
+    }).sort((a, b) => ['fresh', 'owns', 'never', 'missing', 'unknown'].indexOf(a.cls) - ['fresh', 'owns', 'never', 'missing', 'unknown'].indexOf(b.cls) || b.lp - a.lp);
+    const others = CREW.filter(c => !state.on.has(c.id) && LIB[c.id] && LIB[c.id][g.id]);
+    if (!tonight.length && !others.length) return '';
+    return `<div class="lp">${tonight.length ? `<span class="label">Tonight’s crew</span><div class="lp-list">${tonight.map(o =>
+      `<span class="lp-item ${o.cls}">${av(o.c.id, 'sm')} ${esc(o.c.name)} <b>${o.txt}</b></span>`).join('')}</div>` : ''}
+      ${others.length ? `<div class="lp-others">Also owned by ${others.map(c => `${av(c.id, 'sm')} ${esc(c.name)}`).join(' ')}</div>` : ''}</div>`;
   }
   function updatedHtml(g) {
     const n = state.gameNews[g.id];
@@ -360,7 +366,9 @@
     const cap = list => list.slice(0, 48);
 
     const fl = [['coop', 'Co-op'], ['pvp', 'PvP'], ['modded', '🔧 Modded'], ['small', '💾 Under 20 GB'], ['fits', ppl.length > 1 ? `Fits all ${ppl.length} of us` : 'Fits the group'], ['cheap', `Under ${SYM[state.cur]}20`], ['single', 'Single-player only']];
-    const pending = LIVE && D.pendingInfo ? `<p class="hint" style="margin:0 0 12px">⏳ Still fetching Steam info (co-op/PvP, prices) for ${D.pendingInfo} games. Refresh in a minute.</p>` : '';
+    const unsized = f.small ? GAMES.filter(g => !g.disc && !g.size && status(g, ppl).owners.length).length : 0;
+    const sizeNote = f.small && unsized ? `<p class="hint" style="margin:0 0 12px">💾 Still checking install sizes for ${unsized} of these games. They show up here as Steam answers, a few dozen every few minutes.</p>` : '';
+    const pending = sizeNote + (LIVE && D.pendingInfo ? `<p class="hint" style="margin:0 0 12px">⏳ Still fetching Steam info (co-op/PvP, prices) for ${D.pendingInfo} games. Refresh in a minute.</p>` : '');
     v.innerHTML = pending +
       `<div class="filters">${fl.map(([k, l]) => `<button class="toggle ${f[k] ? 'on' : ''}" data-tf="${k}">${l}</button>`).join('')}</div>` +
       (f.single ? section('Single-player', cap(ready), ready.length, 'Owned by someone ticked above. For solo nights.', 'ready') :
@@ -395,7 +403,7 @@
       const s = status(g, ppl);
       const owned = s.owners.length > 0;
       if (o.pool === 'shortlist') { if (!pitchedSet().has(+g.id)) return false; }
-      else if (o.pool === 'all' && (s.missing.length || !(owned || (g.f2p && !g.disc)))) return false;
+      else if (o.pool === 'all' && (s.missing.length || !owned)) return false;
       if (o.pool === 'one' && (s.missing.length > 1 || !owned)) return false;
       if (o.coop && !g.coop) return false;
       if (o.pvp && !g.pvp) return false;
@@ -417,7 +425,7 @@
       </div></div>
       <aside class="side">
         <div class="panel"><h3>Pool</h3>
-          <div class="seg">${pools.map(([k, l]) => `<button class="${o.pool === k ? 'on' : ''}" data-pool="${k}">${l}</button>`).join('')}</div>
+          <div class="seg">${pools.map(([k, l]) => `<button class="${o.pool === k ? 'on' : ''}" data-pool="${k}">${l}</button>`).join('')}</div>${(() => { const blind = people().filter(id => crewById[id].private); return blind.length && o.pool !== 'any' ? `<p class="hint" style="margin:8px 0 0">🔒 Can’t see ${blind.map(id => esc(crewById[id].name)).join(', ')}’s Steam library, so ${blind.length > 1 ? 'they aren’t' : 'they’re not'} counted here.</p>` : ''; })()}
           <div class="poolcount">${p.length} game${p.length === 1 ? '' : 's'} in the pool${state.hidden.size ? ` · ${state.hidden.size} hidden · <button class="linkbtn" data-act="unhide">reset</button>` : ''}</div>
         </div>
         <div class="panel"><h3>Locks</h3><div class="locks">
