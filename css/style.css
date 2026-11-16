@@ -608,3 +608,28 @@ select[data-statpick]{max-width:60%}
 .port-recs{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .port.flash{animation:pitchFlash 3s ease-out}
 @media (max-width:700px){ .port{grid-template-columns:1fr} .port-art{min-height:110px} .ports-bar input{max-width:none} }
+
+/* ---------- Who's on RN? ---------- */
+.rn{margin:0 0 22px}
+.rn-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.rn-head .label{display:flex;align-items:center;gap:8px;font-size:12px}
+.rn-head .hint{margin:0;font-size:13px}
+.rn-head .linkbtn{margin-left:auto;font-size:13px}
+.rn-dot{width:10px;height:10px;border-radius:50%;background:var(--green);box-shadow:0 0 0 0 rgba(62,142,90,.6);animation:rnPulse 2s infinite}
+@keyframes rnPulse{0%{box-shadow:0 0 0 0 rgba(62,142,90,.55)}70%{box-shadow:0 0 0 9px rgba(62,142,90,0)}100%{box-shadow:0 0 0 0 rgba(62,142,90,0)}}
+.rn-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:14px}
+.rn-card{display:grid;grid-template-columns:170px 1fr;background:var(--card);border:3px solid var(--edge);border-radius:var(--r);box-shadow:4px 4px 0 var(--shadow);overflow:hidden}
+.rn-art{border:0;padding:0;background:var(--fill);cursor:pointer;display:block;min-height:100%}
+.rn-art .art{height:100%;aspect-ratio:auto;min-height:120px}
+.rn-art.none{display:grid;place-items:center;font-size:38px;cursor:default}
+.rn-body{padding:12px 14px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.rn-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.rn-name{font-family:'Archivo Black';font-size:18px;color:var(--ink);text-align:left}
+.rn-who{display:flex;align-items:center;gap:8px;font-size:13.5px;flex-wrap:wrap}
+.rn-who span{color:var(--muted)}
+.rn-body .prices{margin:0}
+.rn-foot{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+.rn-own{color:var(--green);font-weight:700}
+.rn-btns{display:flex;align-items:center;gap:12px}
+.rn-show{margin:0 0 14px;font-size:13px}
+@media (max-width:600px){ .rn-list{grid-template-columns:1fr} .rn-card{grid-template-columns:1fr} .rn-art .art{aspect-ratio:460/215;min-height:0} }

@@ -37,6 +37,7 @@
     cur: store.get('cur', 'EUR'),
     disc: { src: 'played', unowned: true, single: false, modded: false, small: false, cap: 0 },
     news: null, newsMine: false, newsPatch: false, gameNews: {},
+    rnHidden: store.get('rn-hidden', false),
     newsTab: 'games', ports: null, portSrc: 'all', portMulti: false, portQ: '', flashPort: null,
     profileId: null, profiles: {}, libQuery: '', libFilter: 'all', libShow: 60,
   };
@@ -45,14 +46,53 @@
   async function loadPresence() {
     if (!LIVE) {
       // fake-data mode: a couple of people "online"
-      state.presence = { bradley: { s: 1, g: 'Counter-Strike 2', gid: 730 }, conor: { s: 1, g: null }, dee: { s: 3, g: null } };
+      state.presence = { bradley: { s: 1, g: 'Counter-Strike 2', gid: 730 }, aoife: { s: 1, g: 'Valheim', gid: 892970 }, conor: { s: 1, g: null }, dee: { s: 3, g: null } };
     } else {
       if (document.hidden) return;
-      try { state.presence = (await API.call('/api/presence')).presence || {}; } catch { return; }
+      try { const r = await API.call('/api/presence'); state.presence = r.presence || {}; mergeGames(r.games); } catch { return; }
     }
     renderCrew();
+    renderRN();
   }
   const isOnline = id => { const p = state.presence[id]; return p && (p.s > 0 || p.g); };
+
+  /* ---------- "Who's on RN?": who's in a game right now ---------- */
+  function renderRN() {
+    const el = $('#rn'); if (!el) return;
+    const inGame = CREW.filter(c => state.presence[c.id] && state.presence[c.id].g);
+    if (!inGame.length || state.rnHidden) {
+      el.hidden = !state.rnHidden || !inGame.length;
+      el.innerHTML = state.rnHidden && inGame.length ? `<button class="linkbtn rn-show" data-rn="show">🟢 ${inGame.length} in a game right now · show</button>` : '';
+      return;
+    }
+    // group by game, so 3 people in CS2 is one card
+    const groups = {};
+    inGame.forEach(c => { const p = state.presence[c.id], k = p.gid || 'x:' + p.g; (groups[k] = groups[k] || { gid: p.gid, name: p.g, who: [] }).who.push(c.id); });
+    const cards = Object.values(groups).sort((a, b) => b.who.length - a.who.length).map(gr => {
+      const g = gr.gid && gameById[gr.gid];
+      const meOwn = g && owns(ME, g.id), n = g ? ownCount(g) : 0;
+      const stats = gr.who.map(id => {
+        const e = g && LIB[id] && LIB[id][g.id];
+        const bits = e ? [`${fmt(e.h)}h total`, e.h2w ? `${fmt(e.h2w)}h last 2 weeks` : null].filter(Boolean).join(' · ') : (crewById[id].private ? 'Steam library private' : 'just started, or not in their synced library yet');
+        return `<div class="rn-who">${av(id, 'sm')}<b>${esc(crewById[id].name)}</b><span>${bits}</span></div>`;
+      }).join('');
+      if (!g) return `<article class="rn-card"><div class="rn-art none">🎮</div><div class="rn-body"><h4>${esc(gr.name)}</h4>${stats}<p class="hint" style="margin:0">Not a Steam game, so there’s no price or store info.</p></div></article>`;
+      return `<article class="rn-card">
+        <button class="rn-art" data-details="${g.id}" title="Trailer and details">${art(g, true)}</button>
+        <div class="rn-body">
+          <div class="rn-top"><button class="linkbtn rn-name" data-details="${g.id}">${esc(g.name)}</button>${review(g)}</div>
+          <div class="tagrow">${tags(g)}</div>
+          ${stats}
+          ${priceBlock(g)}
+          <div class="rn-foot">
+            <span class="${meOwn ? 'rn-own' : ''}">${meOwn ? '✓ You own it' : 'You don’t own it'} · ${n} of the crew ${n === 1 ? 'owns' : 'own'} it</span>
+            <span class="rn-btns"><button class="linkbtn" data-details="${g.id}">Details</button>${pitchBtn(g, 'btn sm')}<a class="linkbtn" href="${storeUrl(g)}" target="_blank" rel="noopener">Steam ↗</a></span>
+          </div>
+        </div></article>`;
+    }).join('');
+    el.hidden = false;
+    el.innerHTML = `<div class="rn-head"><span class="label"><i class="rn-dot"></i>Who’s on RN?</span><span class="hint">${inGame.length} in a game · updates every minute</span><button class="linkbtn" data-rn="hide">Hide</button></div><div class="rn-list">${cards}</div>`;
+  }
   function mergeGames(map) {
     Object.entries(map || {}).forEach(([key, raw]) => {
       const id = +key;
@@ -1185,6 +1225,7 @@
     $$('.tabs a').forEach(a => a.classList.toggle('active', a.dataset.view === v));
     $('#crewPanel').hidden = !(v === 'tonight' || v === 'shuffle');
     ({ tonight: renderTonight, shuffle: renderShuffle, discovery: renderDiscovery, pitches: renderPitches, news: renderNews, leaderboard: renderLb, profile: renderProfile })[v]();
+    renderRN();
     renderCur();
   }
   // The address bar always stays on the bare site; the current tab lives in sessionStorage
@@ -1268,6 +1309,7 @@
     }
     if (d.newsmine !== undefined) { state.newsMine = d.newsmine === '1'; state.news = LIVE ? null : state.news; render(); return; }
     if ('newspatch' in d) { state.newsPatch = !state.newsPatch; render(); return; }
+    if (d.rn) { state.rnHidden = d.rn === 'hide'; store.set('rn-hidden', state.rnHidden); renderRN(); return; }
     if (d.newstab) { state.newsTab = d.newstab; render(); return; }
     if (d.portsrc) { state.portSrc = d.portsrc; render(); return; }
     if ('portmulti' in d) { state.portMulti = !state.portMulti; render(); return; }
