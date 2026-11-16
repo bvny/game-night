@@ -26,7 +26,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Outfit:wght@400;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css">
+<!-- Files are loaded by the script at the bottom, always checking GitHub for a newer copy, so nobody needs to clear their cache after an update -->
+<style>html.booting body{visibility:hidden}</style>
+<script>document.documentElement.classList.add('booting');</script>
 <script>
   // Apply the saved (or system) theme before the page paints, so there's no flash
   (function () { var t; try { t = localStorage.getItem('bg:theme'); } catch (e) {}
@@ -79,10 +81,22 @@
 <div id="toast" role="status"></div>
 <div id="modal" hidden></div>
 
-<script src="js/config.js"></script>
-<script src="js/data.js"></script>
-<script src="js/api.js"></script>
-<script src="js/app.js"></script>
-<script src="js/cats.js"></script>
+<script>
+(async () => {
+  // cache: 'no-cache' = use the saved copy only if GitHub says it hasn't changed (quick check, no full download)
+  const get = f => fetch(f, { cache: 'no-cache' }).then(r => { if (!r.ok) throw new Error(f + ' ' + r.status); return r.text(); });
+  const show = () => document.documentElement.classList.remove('booting');
+  try {
+    const [css, ...js] = await Promise.all(['css/style.css', 'js/config.js', 'js/data.js', 'js/api.js', 'js/app.js', 'js/cats.js'].map(get));
+    const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
+    show();
+    const names = ['config', 'data', 'api', 'app', 'cats'];
+    js.forEach((code, i) => { const sc = document.createElement('script'); sc.textContent = code + '\n//# sourceURL=js/' + names[i] + '.js'; document.body.appendChild(sc); });
+  } catch (e) {
+    show();
+    document.body.insertAdjacentHTML('afterbegin', '<p style="padding:20px;font:16px sans-serif">Couldn’t load the site (' + e.message + '). Refresh to try again.</p>');
+  }
+})();
+</script>
 </body>
 </html>
