@@ -633,3 +633,39 @@ select[data-statpick]{max-width:60%}
 .rn-btns{display:flex;align-items:center;gap:12px}
 .rn-show{margin:0 0 14px;font-size:13px}
 @media (max-width:600px){ .rn-list{grid-template-columns:1fr} .rn-card{grid-template-columns:1fr} .rn-art .art{aspect-ratio:460/215;min-height:0} }
+
+/* ---------- intro / loading screen ---------- */
+.intro{position:fixed;inset:0;z-index:100;display:grid;place-items:center;background:radial-gradient(120% 90% at 50% 10%,#3B2418 0%,#1A100B 60%,#0E0806 100%);color:#F3E6CF;opacity:0;transition:opacity .45s ease;overflow:hidden}
+.intro.in{opacity:1}.intro.out{opacity:0;pointer-events:none}
+.intro-grain{position:absolute;inset:-50%;background-image:repeating-linear-gradient(0deg,rgba(255,255,255,.025) 0 1px,transparent 1px 3px);animation:introScan 8s linear infinite;pointer-events:none}
+@keyframes introScan{to{transform:translateY(60px)}}
+.intro-box{position:relative;width:min(640px,92vw);text-align:center}
+.intro-logo{display:flex;flex-direction:column;align-items:center;gap:6px;margin-bottom:34px}
+.intro-burrito{font-size:64px;animation:introBob 1.6s ease-in-out infinite;filter:drop-shadow(0 8px 0 rgba(0,0,0,.35))}
+@keyframes introBob{50%{transform:translateY(-8px) rotate(-6deg)}}
+.intro-logo>span:nth-child(2){font-family:'Archivo Black';font-size:clamp(34px,7vw,58px);letter-spacing:.04em;color:#F2B532;text-shadow:4px 4px 0 #C8321F}
+.intro-logo small{font:700 13px 'Space Mono';letter-spacing:.4em;text-transform:uppercase;background:#F2B532;color:#24160F;padding:3px 10px}
+.intro-hi{font-size:20px;margin:0 0 22px}
+.intro-start{font-family:'Archivo Black';font-size:22px;letter-spacing:.06em;padding:16px 34px;border:3px solid #F3E6CF;border-radius:14px;background:#C8321F;color:#fff;cursor:pointer;box-shadow:6px 6px 0 #000;animation:introBlink 1.2s steps(2) infinite}
+.intro-start:hover{transform:translate(-2px,-2px);box-shadow:8px 8px 0 #000}
+.intro-start:focus-visible{outline:3px solid #F2B532;outline-offset:4px}
+@keyframes introBlink{50%{background:#A6271A}}
+.intro-small{margin:16px 0 0;font:12px 'Space Mono';opacity:.6}
+.intro-load{display:flex;align-items:center;justify-content:center;gap:12px;font:700 15px 'Space Mono';min-height:24px}
+.intro-spin{width:16px;height:16px;border:3px solid rgba(243,230,207,.25);border-top-color:#F2B532;border-radius:50%;animation:introSpin .7s linear infinite;flex:none}
+@keyframes introSpin{to{transform:rotate(360deg)}}
+.intro-bar{position:relative;height:26px;margin:18px auto 22px;border:3px solid #F3E6CF;border-radius:8px;background:#0E0806;overflow:hidden;box-shadow:4px 4px 0 #000}
+.intro-bar i{position:absolute;inset:0 auto 0 0;width:0;background:repeating-linear-gradient(45deg,#F2B532 0 14px,#E3A11F 14px 28px);animation:introStripes .6s linear infinite}
+@keyframes introStripes{to{background-position:28px 0}}
+.intro-pct{position:absolute;inset:0;display:grid;place-items:center;font:700 13px 'Space Mono';color:#fff;text-shadow:0 0 3px #000,0 0 3px #000,1px 1px 0 #000}
+.intro-say{font-size:clamp(17px,2.6vw,21px);line-height:1.45;min-height:64px;margin:0}
+.intro-say b{color:#F2B532}
+.intro-say.pop{animation:introPop .45s ease-out}
+@keyframes introPop{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.intro-dots{display:flex;justify-content:center;gap:8px;list-style:none;padding:0;margin:22px 0 0}
+.intro-dots li{width:10px;height:10px;border-radius:2px;background:rgba(243,230,207,.2);transition:background .3s}
+.intro-dots li.on{background:#F2B532}
+.intro-ctrl{position:absolute;top:18px;right:18px;display:flex;gap:8px}
+.intro-ctrl button{background:rgba(0,0,0,.35);color:#F3E6CF;border:2px solid rgba(243,230,207,.4);border-radius:10px;padding:6px 12px;font:600 14px Outfit;cursor:pointer}
+.intro-ctrl button:hover{border-color:#F3E6CF}
+@media (prefers-reduced-motion:reduce){ .intro-grain,.intro-burrito,.intro-start,.intro-bar i,.intro-spin{animation:none} }

@@ -1070,7 +1070,7 @@
       </div>
       ${cs2Html(x.cs2)}
       ${statsExplorerHtml(id, P)}`}
-      ${self ? privacyHtml(P) : ''}
+      ${self ? privacyHtml(P) + introHtml() : ''}
 
       ${libraryPanel(P)}`}
     </div>`;
@@ -1137,6 +1137,14 @@
       stats: [['total_kills', h * 31], ['total_wins', Math.round(h * 1.7)], ['total_time_played', h * 3600], ['total_deaths', h * 27], ['matches_played', Math.round(h * 2.2)], ['total_damage', h * 2100]].map(([name, value]) => ({ name, value })),
       achievements: { achieved: seed % 40 + 5, total: 50, recent: [{ name: 'Not bad', at: Date.now() - 3 * 864e5 }, { name: 'Getting there', at: Date.now() - 20 * 864e5 }] },
     };
+  }
+  function introHtml() {
+    return `<div class="panel" style="margin-top:18px"><h3>Intro screen</h3>
+      <p class="hint" style="margin-top:0">The loading screen with the Burrito Gang music that plays the first time you open the site.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center">
+        <button class="btn" data-act="intro">▶ Watch the intro again</button>
+        <label class="check" style="display:flex;gap:8px;align-items:center;cursor:pointer"><input type="checkbox" data-introalways ${store.get('intro-always', false) ? 'checked' : ''}> Play it every time I open the site</label>
+      </div></div>`;
   }
   function privacyHtml(P) {
     const st = P.settings || {};
@@ -1275,6 +1283,7 @@
     if (d.sh) { state.sh[d.sh] = !state.sh[d.sh]; store.set('shuffle', state.sh); render(); return; }
     if (t.id === 'rollBtn') { roll(); return; }
     if (d.act === 'reload') { location.reload(); return; }
+    if (d.act === 'intro') { if (window.BG_INTRO) window.BG_INTRO.play(); return; }
     if (d.act === 'yes' && state.current) {
       if (state.history[0]) state.history[0].verdict = '👍 playing';
       const gname = esc(gameById[state.current].name);
@@ -1390,6 +1399,7 @@
     if (e.target.dataset.cmp !== undefined) { state.cmp[+e.target.dataset.cmp] = e.target.value; render(); }
     if (e.target.dataset.statpick) { state.statPick[e.target.dataset.statpick] = +e.target.value; render(); }
     if (e.target.dataset.setting) saveSetting(e.target.dataset.setting, e.target.checked);
+    if ('introalways' in e.target.dataset) { store.set('intro-always', e.target.checked); toast(e.target.checked ? 'The intro will play every time you open the site' : 'Intro off. Replay it from here any time.'); }
   });
   document.addEventListener('input', e => {
     if (e.target.id === 'q') {

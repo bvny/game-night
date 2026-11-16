@@ -94,10 +94,10 @@
   const get = f => fetch(f + '?v=' + v, { cache: 'no-cache' }).then(r => { if (!r.ok) throw new Error(f + ' ' + r.status); return r.text(); });
   const show = () => document.documentElement.classList.remove('booting');
   try {
-    const [css, ...js] = await Promise.all(['css/style.css', 'js/config.js', 'js/data.js', 'js/api.js', 'js/app.js', 'js/cats.js'].map(get));
+    const [css, ...js] = await Promise.all(['css/style.css', 'js/config.js', 'js/data.js', 'js/api.js', 'js/app.js', 'js/cats.js', 'js/intro.js'].map(get));
     const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
     show();
-    const names = ['config', 'data', 'api', 'app', 'cats'];
+    const names = ['config', 'data', 'api', 'app', 'cats', 'intro'];
     js.forEach((code, i) => { const sc = document.createElement('script'); sc.textContent = code + '\n//# sourceURL=js/' + names[i] + '.js'; document.body.appendChild(sc); });
   } catch (e) {
     show();
