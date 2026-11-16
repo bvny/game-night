@@ -538,3 +538,20 @@ h4.sub{margin:18px 0 8px;font:11px 'Space Mono';text-transform:uppercase;letter-
 .privacy .check small{display:block;color:var(--muted);font-size:13px;margin-top:2px}
 select[data-statpick]{max-width:60%}
 .who-top .tagline{margin:3px 0 4px}
+
+/* ---------- leaderboard: category sub-nav + slim board picker ---------- */
+.lb-cats{display:flex;gap:4px;border-bottom:3px solid var(--edge);margin-bottom:0;overflow-x:auto;scrollbar-width:none}
+.lb-cats::-webkit-scrollbar{display:none}
+.lb-cats button{display:flex;align-items:center;gap:8px;background:none;border:0;border-bottom:4px solid transparent;margin-bottom:-3px;padding:10px 16px 11px;
+  font:700 15px/1.2 inherit;font-family:inherit;color:var(--muted);cursor:pointer;white-space:nowrap;border-radius:10px 10px 0 0;transition:color .15s,background .15s}
+.lb-cats button .ic{font-size:17px;filter:grayscale(1);opacity:.7;transition:filter .15s,opacity .15s}
+.lb-cats button:hover{color:var(--ink);background:var(--blue-soft)}
+.lb-cats button.on{color:var(--ink);border-bottom-color:var(--yellow)}
+.lb-cats button.on .ic,.lb-cats button:hover .ic{filter:none;opacity:1}
+.lb-boards{display:flex;flex-wrap:wrap;gap:4px 18px;padding:12px 2px 18px}
+.lb-boards button{background:none;border:0;padding:4px 0;font-size:14px;font-weight:600;font-family:inherit;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent}
+.lb-boards button:hover{color:var(--ink)}
+.lb-boards button.on{color:var(--ink);border-bottom-color:var(--red)}
+@media (max-width:600px){ .lb-cats button{padding:9px 11px 10px;font-size:14px;gap:6px} .lb-boards{gap:2px 14px} }
+
+.lb-layout>div,.lb-layout>.panel{min-width:0}

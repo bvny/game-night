@@ -694,11 +694,13 @@
   }
   const fullPrice = g => !g || g.f2p ? 0 : (P(g).base || P(g).steam || 0);
   const gname = id => (gameById[id] || {}).name || 'something';
+  const LOADED_AT = Date.now();
   const FIVEM = 218;
+  const LB_ICONS = { Playtime: '⏱️', Library: '📚', Money: '💸', Steam: '🎖️', CS2: '🎯' };
   const LB_GROUPS = [
-    ['Playtime', [['recent', 'Last 2 weeks'], ['all', 'All time'], ['fivem', '🚓 FiveM'], ['onetrick', 'One-trick'], ['variety', 'Variety']]],
+    ['Playtime', [['recent', 'Last 2 weeks'], ['all', 'All time'], ['fivem', 'FiveM'], ['onetrick', 'One-trick'], ['variety', 'Variety']]],
     ['Library', [['owned', 'Games owned'], ['backlog', 'Backlog %'], ['freeloader', 'Free-game hours']]],
-    ['Money', [['value', '💰 Account value'], ['shame', '🔥 Unplayed spend']]],
+    ['Money', [['value', 'Account value'], ['shame', 'Unplayed spend']]],
     ['Steam', [['level', 'Steam level'], ['age', 'Oldest account'], ['ach', 'Achievement %'], ['perfect', 'Perfect games'], ['badges', 'Badges'], ['friends', 'Friends']]],
     ['CS2', [['cs2kd', 'K/D'], ['cs2hs', 'Headshot %'], ['cs2win', 'Win rate'], ['cs2mvps', 'MVPs']]],
   ];
@@ -752,7 +754,9 @@
     const steamy = ['level', 'age', 'ach', 'perfect', 'badges', 'friends'].includes(mode) || mode.startsWith('cs2');
     const leftNote = left.length ? `${esc(left.map(c => c.name).join(', '))} not on this board (${isMoney ? 'chose to hide their spending' : steamy ? (mode.startsWith('cs2') ? 'no CS2 stats, or' : 'not loaded yet, or') + ' stats hidden' : 'not enough data'}). ` : '';
     return `<div class="lb-layout"><div>
-        <div class="lb-groups">${LB_GROUPS.map(([g, ms]) => `<div class="lb-group"><span class="label">${g}</span><div class="filters">${ms.map(([k, l]) => `<button class="toggle ${mode === k ? 'on' : ''}" data-lb="${k}">${l}</button>`).join('')}</div></div>`).join('')}</div>
+        ${(() => { const cat = LB_GROUPS.find(([, ms]) => ms.some(([k]) => k === mode)) || LB_GROUPS[0];
+          return `<nav class="lb-cats">${LB_GROUPS.map(([g, ms]) => `<button class="${g === cat[0] ? 'on' : ''}" data-lb="${ms[0][0]}"><span class="ic">${LB_ICONS[g]}</span>${g}</button>`).join('')}</nav>
+          <div class="lb-boards">${cat[1].map(([k, l]) => `<button class="${mode === k ? 'on' : ''}" data-lb="${k}">${l}</button>`).join('')}</div>`; })()}
         ${rows.length ? rows.map((r, i) => `<div class="lbrow ${i === 0 ? 'gold' : ''}">
           <div class="rank-b r${i < 3 ? i + 1 : 0}">${i + 1}</div>${av(r.c.id, 'lg')}
           <div class="who"><div class="who-top"><button class="linkbtn name" data-view="profile" data-profile="${r.c.id}">${esc(r.c.name)}</button>${i === 0 && r.val > 0 && TAGLINES[mode] ? `<span class="tagline">${esc(tagline(r.c, mode))}</span>` : ''}</div>${favOf(r) ? `<div class="fav">${favOf(r)}</div>` : ''}
@@ -761,7 +765,8 @@
         ${isMoney ? `<p class="hint">${mode === 'value' ? 'What every game in each library would cost at today’s full Steam price.' : 'Full Steam price of games bought and never launched. Steam doesn’t share real purchase history, so this is the closest honest number.'} Games still loading prices count as zero.</p>` : ''}
         ${mode === 'onetrick' ? '<p class="hint">Share of all their hours spent in their single most played game.</p>' : ''}
         ${mode === 'fivem' ? '<p class="hint">Steam counts FiveM time as “Source SDK Base 2007”, so this is that number. It’s included in everyone’s total hours too.</p>' : ''}
-        <p class="hint">${leftNote}${priv ? esc(priv) + ' not shown (Steam private or not linked). ' : ''}Anyone can hide their stats or spending from their profile.</p>
+        <p class="hint">${leftNote}${priv ? esc(priv) + ' not shown (Steam private or not linked). ' : ''}Anyone can hide their stats or spending from their profile.
+          ${LIVE ? ` Data loaded ${ago(LOADED_AT)}. <button class="linkbtn" data-act="reload">Refresh</button>` : ''}</p>
       </div>
       <div class="panel"><h3>Most played together</h3><ul class="together">
         ${together.map(t => `<li><span>${esc(t.g.name)}</span><span>${fmt(t.h)}h · ${t.n} players</span></li>`).join('') || '<li><span>Not enough data yet</span></li>'}
@@ -1127,6 +1132,7 @@
     if (d.pool) { state.sh.pool = d.pool; store.set('shuffle', state.sh); render(); return; }
     if (d.sh) { state.sh[d.sh] = !state.sh[d.sh]; store.set('shuffle', state.sh); render(); return; }
     if (t.id === 'rollBtn') { roll(); return; }
+    if (d.act === 'reload') { location.reload(); return; }
     if (d.act === 'yes' && state.current) {
       if (state.history[0]) state.history[0].verdict = '👍 playing';
       const gname = esc(gameById[state.current].name);
