@@ -666,6 +666,7 @@
       'wallet left the chat', '"I\'ll play it eventually"'],
     value: ['account worth more than their car', "Gabe's retirement fund", 'financially irresponsible, digitally rich', 'could have bought a house',
       'the wallet is crying', 'living proof sales work'],
+    fivem: ['lives in Los Santos', 'more RP hours than real-life hours', 'has a second life (literally)', 'the city never sleeps, neither do they', 'certified roleplayer', 'still waiting for their whitelist'],
     onetrick: ['one game, one love', 'has heard of other games, allegedly', 'loyalty or Stockholm syndrome?', 'commitment issues: none', 'a one-trick pony'],
     variety: ['can’t commit to anything', 'the sampler platter', 'attention span of a goldfish', 'tries everything once', 'serial game-hopper'],
     backlog: ['the backlog is load-bearing', '“I’ll get to it”', 'collector, not a player', 'pile of shame champion', 'buys more than they play'],
@@ -693,8 +694,9 @@
   }
   const fullPrice = g => !g || g.f2p ? 0 : (P(g).base || P(g).steam || 0);
   const gname = id => (gameById[id] || {}).name || 'something';
+  const FIVEM = 218;
   const LB_GROUPS = [
-    ['Playtime', [['recent', 'Last 2 weeks'], ['all', 'All time'], ['onetrick', 'One-trick'], ['variety', 'Variety']]],
+    ['Playtime', [['recent', 'Last 2 weeks'], ['all', 'All time'], ['fivem', '🚓 FiveM'], ['onetrick', 'One-trick'], ['variety', 'Variety']]],
     ['Library', [['owned', 'Games owned'], ['backlog', 'Backlog %'], ['freeloader', 'Free-game hours']]],
     ['Money', [['value', '💰 Account value'], ['shame', '🔥 Unplayed spend']]],
     ['Steam', [['level', 'Steam level'], ['age', 'Oldest account'], ['ach', 'Achievement %'], ['perfect', 'Perfect games'], ['badges', 'Badges'], ['friends', 'Friends']]],
@@ -709,6 +711,7 @@
     switch (mode) {
       case 'recent': return { val: sum(id => lib[id].h2w), ...topBy(id => lib[id].h2w), fav: t => `Mostly ${gname(t.top)} · ${fmt(t.topV)}h` };
       case 'all': return { val: allH, ...topBy(id => lib[id].h), fav: t => `Mostly ${gname(t.top)} · ${fmt(t.topV)}h` };
+      case 'fivem': { const f = lib[FIVEM]; return f && f.h ? { val: f.h, fav: () => `${f.h2w ? fmt(f.h2w) + 'h in the last 2 weeks' : 'not played lately'}${f.lp ? ' · last on ' + since(f.lp) : ''} · ${allH ? Math.round(f.h / allH * 100) : 0}% of all their hours` } : null; }
       case 'onetrick': { const t = topBy(id => lib[id].h); return allH > 10 ? { val: Math.round(t.topV / allH * 1000) / 10, ...t, fav: t => `${gname(t.top)} · ${fmt(t.topV)}h` } : null; }
       case 'variety': { const played = ids.filter(id => lib[id].h2w > 0); return { val: played.length, fav: () => played.slice(0, 4).map(gname).join(', ') }; }
       case 'owned': return { val: ids.length };
@@ -729,7 +732,7 @@
     }
     return null;
   }
-  const LB_UNIT = { recent: 'hrs · 2 weeks', all: 'hrs · all time', onetrick: 'of hours in one game', variety: 'games · 2 weeks', owned: 'games', backlog: 'never launched', freeloader: 'hrs in free games',
+  const LB_UNIT = { fivem: 'hrs in FiveM', recent: 'hrs · 2 weeks', all: 'hrs · all time', onetrick: 'of hours in one game', variety: 'games · 2 weeks', owned: 'games', backlog: 'never launched', freeloader: 'hrs in free games',
     value: 'full Steam price', shame: 'never launched', level: 'Steam level', age: 'years on Steam', ach: 'achievements', perfect: '100% games', badges: 'badges', friends: 'friends',
     cs2kd: 'kills per death', cs2hs: 'headshots', cs2win: 'matches won', cs2mvps: 'MVPs' };
   const PCT = new Set(['onetrick', 'backlog', 'ach', 'cs2hs', 'cs2win']);
@@ -757,6 +760,7 @@
           <div class="val">${show(r.val)}<small>${LB_UNIT[mode]}</small></div></div>`).join('') : `<div class="empty">Nobody on this board yet. ${steamy ? 'Steam profile numbers load once a day per person.' : ''}</div>`}
         ${isMoney ? `<p class="hint">${mode === 'value' ? 'What every game in each library would cost at today’s full Steam price.' : 'Full Steam price of games bought and never launched. Steam doesn’t share real purchase history, so this is the closest honest number.'} Games still loading prices count as zero.</p>` : ''}
         ${mode === 'onetrick' ? '<p class="hint">Share of all their hours spent in their single most played game.</p>' : ''}
+        ${mode === 'fivem' ? '<p class="hint">Steam counts FiveM time as “Source SDK Base 2007”, so this is that number. It’s included in everyone’s total hours too.</p>' : ''}
         <p class="hint">${leftNote}${priv ? esc(priv) + ' not shown (Steam private or not linked). ' : ''}Anyone can hide their stats or spending from their profile.</p>
       </div>
       <div class="panel"><h3>Most played together</h3><ul class="together">
@@ -888,6 +892,8 @@
       ['Library value', money(worth), 'at full Steam price'],
       ['Multiplayer share', total ? Math.round(multiMin / total * 100) + '%' : '—', 'of hours in multiplayer games'],
     ];
+    const fm = visible.find(g => g.appid === 218);
+    if (fm && fm.minutes) tiles.splice(2, 0, ['FiveM', fmt(hrsOf(fm.minutes)) + 'h', `${total ? Math.round(fm.minutes / total * 100) : 0}% of total · counted as Source SDK Base 2007`]);
 
     v.innerHTML = `<div class="pf">
       <div class="pf-head">

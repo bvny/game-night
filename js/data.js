@@ -237,5 +237,11 @@
     [3241660, 'R.E.P.O. update 0.2: new level', true, 12, 'A haunted museum, two new monsters and much louder screaming.'],
   ].map(([appid, title, patch, daysAgo, snippet], i) => ({ gid: 'n' + i, appid, title, patch, snippet, date: Date.now() - daysAgo * 864e5 - i * 3600e3, url: `https://store.steampowered.com/news/app/${appid}` }));
 
+  // FiveM: Steam logs it as Source SDK Base 2007 (app 218)
+  GAMES.push(G(218, 'FiveM (Source SDK Base 2007)', 0, { coop: true, pvp: true, modded: true, tags: ['Roleplay', 'GTA V', 'Multiplayer', 'Open World'], size: 3900,
+    desc: 'GTA V roleplay and custom servers. Steam counts FiveM time as Source SDK Base 2007.' }));
+  [['james', 2751, 22], ['bradley', 1840, 9], ['conor', 960, 0], ['dee', 310, 4], ['sam', 75, 0]].forEach(([id, h, h2w]) => {
+    if (LIB[id]) LIB[id][218] = { h, h2w, lp: Date.now() - (h2w ? 2 : 40) * 864e5 };
+  });
   window.BG_DATA = { CREW, GAMES, LIB, ME: 'james', PITCHES, NEWS };
 })();
