@@ -619,7 +619,7 @@
   function pitchHtml(p) {
     const g = gameById[p.game], mine = p.votes.includes(ME);
     const to = p.to.length ? p.to.filter(t => crewById[t]).map(t => '@' + esc(crewById[t].name)).join(' ') : 'everyone';
-    return `<div class="pitch">
+    return `<div class="pitch ${state.flashPitch === p.id ? 'flash' : ''}" id="pitch-${p.id}">
       <button class="vote ${mine ? 'on' : ''}" data-vote="${p.id}" title="${mine ? 'Remove vote' : 'Vote'}"><span>▲</span>${p.votes.length}</button>
       <div><h4>${esc(g.name)}${p.by === ME && LIVE ? ` <button class="linkbtn del" data-delpitch="${p.id}" title="Delete your pitch">delete</button>` : ''}</h4>
         <div class="by">${av(p.by, 'sm')} ${esc(crewById[p.by].name)} → ${to} · ${ago(p.at)}</div>
@@ -889,13 +889,14 @@
     const maxD = Math.max(1, ...daily.map(d => d.h));
     const since = sm.created ? new Date(sm.created).getFullYear() : null;
 
+    const moneyHidden = !self && c.hide_money;
     const tiles = [
-      ['Total hours', fmt(hrsOf(total)) + 'h', `${fmt(Math.round(total / 60 / 24))} days of your life`],
-      ['Last 2 weeks', fmt(hrsOf(twoW)) + 'h', twoW ? `~${fmt(Math.round(twoW / 14 / 6) / 10)}h a day` : 'touching grass, apparently'],
-      ['Games owned', fmt(visible.length), self && P.library.length !== visible.length ? `${P.library.length - visible.length} hidden` : ''],
-      ['Never played', fmt(never), visible.length ? `${Math.round(never / visible.length * 100)}% of the library` : ''],
-      ['Library value', money(worth), 'at full Steam price'],
-      ['Multiplayer share', total ? Math.round(multiMin / total * 100) + '%' : '—', 'of hours in multiplayer games'],
+      ['Total hours', fmt(hrsOf(total)) + 'h', `${fmt(Math.round(total / 60 / 24))} days of your life`, 'total'],
+      ['Last 2 weeks', fmt(hrsOf(twoW)) + 'h', twoW ? `~${fmt(Math.round(twoW / 14 / 6) / 10)}h a day` : 'touching grass, apparently', 'recent'],
+      ['Games owned', fmt(visible.length), self && P.library.length !== visible.length ? `${P.library.length - visible.length} hidden` : '', 'owned'],
+      ['Never played', fmt(never), visible.length ? `${Math.round(never / visible.length * 100)}% of the library` : '', 'never'],
+      moneyHidden ? ['Library value', '🔒', 'kept private', null] : ['Library value', money(worth), 'at full Steam price', c.hide_money ? null : 'value'],
+      ['Multiplayer share', total ? Math.round(multiMin / total * 100) + '%' : '—', 'of hours in multiplayer games', 'multi'],
     ];
     const fm = visible.find(g => g.appid === 218);
     if (fm && fm.minutes) tiles.splice(2, 0, ['FiveM', fmt(hrsOf(fm.minutes)) + 'h', `${total ? Math.round(fm.minutes / total * 100) : 0}% of total · counted as Source SDK Base 2007`]);
@@ -918,7 +919,7 @@
       ${self ? steamPanel(P) : ''}
       ${!P.user.steam_linked ? `<div class="empty">${self ? 'Link your Steam account above to see your stats.' : esc(c.name) + ' hasn’t linked Steam yet.'}</div>` :
         P.user.steam_private ? `<div class="empty">${self ? 'Your Steam game details are private, so there’s nothing to show yet.' : esc(c.name) + '’s Steam library is private.'}</div>` : `
-      <div class="tiles">${tiles.map(([l, val, sub]) => `<div class="tile"><span class="label">${l}</span><b>${val}</b><small>${sub}</small></div>`).join('')}</div>
+      <div class="tiles">${tiles.map(([l, val, sub, rk]) => { const r = rk && crewRank(rk, id); return `<div class="tile"><span class="label">${l}</span><b>${val}</b><small>${sub}</small>${r ? `<span class="crank ${r.pos <= 3 ? 'top' : ''}" title="Compared with everyone in the crew with a public Steam library">${['🥇', '🥈', '🥉'][r.pos - 1] || '#' + r.pos} ${r.pos <= 3 ? `#${r.pos} ` : ''}of ${r.of} in the crew${rk === 'never' && r.pos === 1 ? ' (oops)' : ''}</span>` : ''}</div>`; }).join('')}</div>
 
       <div class="pf-grid">
         <div class="panel"><h3>Most played</h3>
@@ -1034,6 +1035,24 @@
       render();
     } catch { toast('Couldn’t save that. Try again.'); }
   }
+  // Where someone sits in the crew for each profile tile (same numbers the crew sees)
+  function crewRank(key, id) {
+    const pub = CREW.filter(c => !c.private && LIB[c.id] && (key !== 'value' || !c.hide_money));
+    if (pub.length < 2 || !pub.find(c => c.id === id)) return null;
+    const val = c => {
+      const lib = LIB[c.id], ids = Object.keys(lib);
+      const tot = ids.reduce((a, g) => a + lib[g].h, 0);
+      if (key === 'total') return tot;
+      if (key === 'recent') return ids.reduce((a, g) => a + lib[g].h2w, 0);
+      if (key === 'owned') return ids.length;
+      if (key === 'never') return ids.filter(g => !lib[g].h).length;
+      if (key === 'value') return ids.reduce((a, g) => a + fullPrice(gameById[g]), 0);
+      if (key === 'multi') return tot ? ids.reduce((a, g) => a + (gameById[g] && isMulti(gameById[g]) ? lib[g].h : 0), 0) / tot : 0;
+      return 0;
+    };
+    const mine = val(crewById[id]);
+    return { pos: 1 + pub.filter(c => c.id !== id && val(c) > mine).length, of: pub.length };
+  }
   function steamPanel(P) {
     const u = P.user;
     const status = !u.steam_linked ? 'Not linked yet.' : u.steam_private ? '⚠️ Linked, but your Steam <b>Game details</b> are private.' : `Linked · ${fmt(u.game_count || P.library.length)} games.`;
@@ -1044,7 +1063,8 @@
         <input id="steamInput" placeholder="${u.steam_linked ? 'Paste a different Steam profile link to switch accounts' : 'steamcommunity.com/id/yourname'}" autocomplete="off">
         <button class="btn" id="steamLinkBtn">${u.steam_linked ? 'Change' : 'Link Steam'}</button>
         ${u.steam_linked ? '<button class="btn ghost" id="resyncBtn">Resync</button><button class="btn ghost" id="unlinkBtn">Unlink</button>' : ''}
-      </div></div>`;
+      </div>
+      ${LIVE ? '<p class="hint" style="margin:12px 0 0">Signed in with Discord. You stay logged in on this device. <button class="linkbtn" data-act="logout">Log out</button></p>' : ''}</div>`;
   }
   function libraryPanel(P) {
     const q = state.libQuery.trim().toLowerCase(), f = state.libFilter;
@@ -1261,12 +1281,78 @@
     if (e.code === 'Space' && state.view === 'shuffle' && !typing && $('#modal').hidden) { e.preventDefault(); roll(); }
   });
 
+  /* ---------- notifications ---------- */
+  const notif = { items: [], unread: 0, open: false, loaded: false };
+  function mockNotifs() {
+    const read = new Set(store.get('notif-read', []));
+    const g = id => gameById[id] || {};
+    const list = [
+      { id: 'm1', kind: 'pitch', from: 'bradley', appid: 1966720, pitch: (state.pitches[0] || {}).id, note: 'tonight? 👀', at: Date.now() - 25 * 60e3 },
+      { id: 'm2', kind: 'vote', from: 'aoife', appid: 553850, pitch: (state.pitches[1] || {}).id, at: Date.now() - 3 * 3600e3 },
+      { id: 'm3', kind: 'playing', from: 'conor', appid: 550, at: Date.now() - 26 * 3600e3 },
+    ].map(n => ({ ...n, game: g(n.appid).name || 'a game', read: read.has(n.id) }));
+    return { items: list, unread: list.filter(n => !n.read).length };
+  }
+  async function loadNotifs() {
+    try {
+      const r = LIVE ? await API.call('/api/notifications') : mockNotifs();
+      notif.items = r.items; notif.unread = r.unread; notif.loaded = true;
+      (r.items || []).forEach(n => { if (n.appid && n.img && !gameById[n.appid]) mergeGames({ [n.appid]: { name: n.game, header: n.img } }); });
+    } catch { /* bell just stays as it was */ }
+    renderBell();
+  }
+  function notifText(n) {
+    const who = `<b>${esc((crewById[n.from] || {}).name || 'Someone')}</b>`, game = `<b>${esc(n.game || 'a game')}</b>`;
+    if (n.kind === 'pitch') return `${who} pitched ${game} to you`;
+    if (n.kind === 'vote') return `${who} voted for your pitch of ${game}`;
+    if (n.kind === 'playing') return `${who} says you’re playing ${game}`;
+    return `${who} · ${game}`;
+  }
+  const NOTIF_IC = { pitch: '📣', vote: '▲', playing: '🎮' };
+  function renderBell() {
+    const b = $('#bellBadge'); if (!b) return;
+    b.hidden = !notif.unread; b.textContent = notif.unread > 9 ? '9+' : notif.unread;
+    $('#bellBtn').classList.toggle('has', notif.unread > 0);
+    $('#bellBtn').title = notif.unread ? `${notif.unread} new notification${notif.unread > 1 ? 's' : ''}` : 'Notifications';
+    const panel = $('#notifPanel');
+    panel.hidden = !notif.open; $('#bellBtn').setAttribute('aria-expanded', String(notif.open));
+    if (!notif.open) return;
+    panel.innerHTML = `<div class="np-head"><b>Notifications</b>${notif.unread ? '<button class="linkbtn" data-notif-all>Mark all read</button>' : ''}</div>
+      ${!notif.loaded ? '<p class="hint np-empty">Loading…</p>' : !notif.items.length ? '<p class="hint np-empty">Nothing yet. When someone pitches you a game or votes on your pitch, it shows up here.</p>' :
+        `<div class="np-list">${notif.items.map(n => `<button class="np-item ${n.read ? '' : 'unread'}" data-notif="${n.id}">
+          <span class="np-av">${crewById[n.from] ? av(n.from) : ''}<i>${NOTIF_IC[n.kind] || '•'}</i></span>
+          <span class="np-body"><span class="np-text">${notifText(n)}</span>${n.note ? `<span class="np-note">“${esc(n.note)}”</span>` : ''}<span class="np-when">${ago(n.at)}</span></span>
+        </button>`).join('')}</div>`}`;
+  }
+  async function markRead(ids) {
+    notif.items.forEach(n => { if (!ids || ids.includes(n.id)) n.read = true; });
+    notif.unread = notif.items.filter(n => !n.read).length; renderBell();
+    if (!LIVE) { store.set('notif-read', notif.items.filter(n => n.read).map(n => n.id)); return; }
+    try { await API.call('/api/notifications/read', { method: 'POST', body: JSON.stringify(ids ? { ids } : {}) }); } catch { }
+  }
+  function openNotif(n) {
+    markRead([n.id]); notif.open = false; renderBell();
+    if ((n.kind === 'pitch' || n.kind === 'vote') && n.pitch) {
+      state.flashPitch = n.pitch; go('pitches');
+      setTimeout(() => { const el = document.getElementById('pitch-' + n.pitch); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 250);
+      setTimeout(() => { state.flashPitch = null; }, 3000);
+    } else if (n.appid && gameById[n.appid]) openDetails(n.appid);
+  }
+  document.addEventListener('click', e => {
+    if (e.target.closest('#bellBtn')) { notif.open = !notif.open; if (notif.open) { setMenu(false); loadNotifs(); } renderBell(); return; }
+    if (e.target.closest('[data-notif-all]')) { markRead(null); return; }
+    const it = e.target.closest('[data-notif]');
+    if (it) { const n = notif.items.find(x => x.id === it.dataset.notif); if (n) openNotif(n); return; }
+    if (notif.open && !e.target.closest('#bellwrap')) { notif.open = false; renderBell(); }
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && notif.open) { notif.open = false; renderBell(); } });
+
   /* ---------- init ---------- */
   if (LIVE) {
     $('.mockbar').hidden = true;
     const core = $('[data-crew=core]'); if (core) core.textContent = 'Just me';
   }
-  $('#me').innerHTML = `<button class="me-btn" data-view="profile" data-profile="${ME}" title="Your profile">${av(ME)}<span>${esc(crewById[ME].name)}<small>Your profile</small></span></button>${LIVE ? '<button class="linkbtn logout" data-act="logout" title="Log out">Log out</button>' : ''}`;
+  $('#me').innerHTML = `<button class="me-btn" data-view="profile" data-profile="${ME}" title="Your profile">${av(ME)}<span>${esc(crewById[ME].name)}<small>Your profile</small></span></button>`;
   mergeGames(D.pitchGames);
   if (LIVE && D.PITCHES) { state.pitches = D.PITCHES; state.pitchesLoaded = true; }
   renderTheme();
@@ -1276,5 +1362,7 @@
   startView();
   loadPresence();
   if (LIVE) setInterval(loadPresence, 60_000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadPresence(); });
+  loadNotifs();
+  if (LIVE) setInterval(() => { if (!document.hidden) loadNotifs(); }, 60_000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { loadPresence(); if (LIVE) loadNotifs(); } });
 })();
