@@ -243,5 +243,21 @@
   [['james', 2751, 22], ['bradley', 1840, 9], ['conor', 960, 0], ['dee', 310, 4], ['sam', 75, 0]].forEach(([id, h, h2w]) => {
     if (LIB[id]) LIB[id][218] = { h, h2w, lp: Date.now() - (h2w ? 2 : 40) * 864e5 };
   });
-  window.BG_DATA = { CREW, GAMES, LIB, ME: 'james', PITCHES, NEWS };
+  // "Is it ported?" sample feed (live mode reads Quiver Launcher + r/decomps + r/recomps)
+  const hr = 3600e3;
+  const PORTS = [
+    { key: 'quiver:skate-3-recomp', source: 'quiver', kind: 'update', title: 'Skate 3 Recomp', url: 'https://quiverlauncher.com', game: 'Skate 3', version: 'v0.9.2', date: Date.now() - 3 * hr,
+      summary: 'Native PC recompilation of Skate 3 with online multiplayer through a community server, 4K and unlocked framerate.', tags: ['X360', 'port', 'recomp', 'online multiplayer', 'widescreen'], multi: true, img: null },
+    { key: 'reddit:t3_a1', source: 'reddit', kind: 'post', title: 'GTA IV decomp: 4-player co-op mod is working in story missions', url: 'https://www.reddit.com/r/decomps/', game: null, date: Date.now() - 8 * hr,
+      summary: 'Got the first co-op build running. Missions sync, but cutscenes still desync for the passenger. Looking for testers.', tags: ['r/decomps'], multi: true, img: null },
+    { key: 'quiver:zelda64-recomp', source: 'quiver', kind: 'new', title: 'Zelda 64: Recompiled', url: 'https://quiverlauncher.com', game: "The Legend of Zelda: Majora's Mask", version: '1.2.0', date: Date.now() - 20 * hr,
+      summary: "Majora's Mask running natively on PC with widescreen, mods and gyro aiming.", tags: ['N64', 'port', 'recomp', 'widescreen', 'mods'], multi: false, img: null },
+    { key: 'reddit:t3_a2', source: 'reddit', kind: 'post', title: 'Red Dead Redemption PS3 recomp progress: boots to menu', url: 'https://www.reddit.com/r/recomps/', game: null, date: Date.now() - 30 * hr,
+      summary: 'Still very early, but the menu and first mission load. Multiplayer is out of scope for now.', tags: ['r/recomps'], multi: true, img: null },
+    { key: 'quiver:sonic-unleashed', source: 'quiver', kind: 'update', title: 'Unleashed Recompiled', url: 'https://quiverlauncher.com', game: 'Sonic Unleashed', version: '1.0.3', date: Date.now() - 52 * hr,
+      summary: 'The Xbox 360 version of Sonic Unleashed as a native PC game.', tags: ['X360', 'port', 'recomp', 'ultrawide'], multi: false, img: null },
+    { key: 'reddit:t3_a3', source: 'reddit', kind: 'post', title: 'Left 4 Dead 2 split-screen restored on PC via a decomp of the console build', url: 'https://www.reddit.com/r/decomps/', game: null, date: Date.now() - 70 * hr,
+      summary: 'Split-screen for 2 players works with controllers. Online still goes through Steam.', tags: ['r/decomps'], multi: true, img: null },
+  ];
+  window.BG_DATA = { CREW, GAMES, LIB, ME: 'james', PITCHES, NEWS, PORTS };
 })();

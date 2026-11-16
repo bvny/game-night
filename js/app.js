@@ -37,6 +37,7 @@
     cur: store.get('cur', 'EUR'),
     disc: { src: 'played', unowned: true, single: false, modded: false, small: false, cap: 0 },
     news: null, newsMine: false, newsPatch: false, gameNews: {},
+    newsTab: 'games', ports: null, portSrc: 'all', portMulti: false, portQ: '', flashPort: null,
     profileId: null, profiles: {}, libQuery: '', libFilter: 'all', libShow: 60,
   };
   let draft = null, confirmUnlink = false;
@@ -556,7 +557,64 @@
     catch { state.news = []; toast('Could not load news.'); }
     if (state.view === 'news') render();
   }
+  const NEWS_TABS = [['games', '📰 Game news'], ['ports', '🧩 Is it ported?']];
+  const newsTabsHtml = () => `<nav class="lb-cats news-tabs">${NEWS_TABS.map(([k, l]) => `<button class="${state.newsTab === k ? 'on' : ''}" data-newstab="${k}">${l}</button>`).join('')}</nav>`;
+  async function loadPorts() {
+    if (state.portsLoading) return; state.portsLoading = true;
+    try { state.ports = LIVE ? await API.call('/api/ports') : { items: D.PORTS || [], recs: [], status: null }; }
+    catch { state.ports = { items: [], recs: [], status: null, error: true }; }
+    state.portsLoading = false;
+    if (state.view === 'news' && state.newsTab === 'ports') render();
+  }
+  // Does anyone in the crew own the original on Steam? (loose title match)
+  const normT = t => String(t || '').toLowerCase().replace(/[™®:'’!.,\-–]/g, ' ').replace(/\b(the|recomp(iled)?|decomp|port|pc|remastered|hd)\b/g, ' ').replace(/\s+/g, ' ').trim();
+  function crewOwnsLike(item) {
+    const want = [item.game, item.title].filter(Boolean).flatMap(x => x.split(',')).map(normT).filter(x => x.length > 3);
+    if (!want.length) return null;
+    return GAMES.find(g => !g.disc && ownCount(g) > 0 && want.includes(normT(g.name))) || null;
+  }
+  function renderPorts() {
+    const P_ = state.ports;
+    const head = `<div class="section-head" style="margin-top:0"><h2>News</h2><p>Single-player games going multiplayer, console games coming to PC: recomps, decomps and co-op mods.</p></div>${newsTabsHtml()}`;
+    if (!P_) { $('#view').innerHTML = head + '<div class="empty">Checking Quiver and Reddit…</div>'; loadPorts(); return; }
+    const q = state.portQ.trim().toLowerCase();
+    const recsBy = {}; (P_.recs || []).forEach(r => (recsBy[r.key] = recsBy[r.key] || []).push(r));
+    const list = P_.items.filter(x => (state.portSrc === 'all' || (state.portSrc === 'recs' ? recsBy[x.key] : x.source === state.portSrc))
+      && (!state.portMulti || x.multi) && (!q || [x.title, x.game, x.summary, ...(x.tags || [])].join(' ').toLowerCase().includes(q)));
+    const st = P_.status || {}, redditDown = LIVE && Object.keys(st).some(k => k.startsWith('r/') && String(st[k]).startsWith('error'));
+    const srcs = [['all', 'Everything'], ['quiver', 'Quiver Launcher'], ['reddit', 'Reddit'], ['recs', `⭐ Recommended${(P_.recs || []).length ? ' (' + new Set(P_.recs.map(r => r.key)).size + ')' : ''}`]];
+    const srcLabel = x => x.source === 'quiver' ? (x.kind === 'new' ? '🆕 New on Quiver' : '⬆️ Updated on Quiver') : '💬 ' + esc((x.tags || [])[0] || 'Reddit');
+    $('#view').innerHTML = head + `
+      <div class="ports-links">Track them yourself:
+        <a href="https://quiverlauncher.com" target="_blank" rel="noopener">Quiver Launcher ↗</a>
+        <a href="https://recomplauncher.com" target="_blank" rel="noopener">RecompLauncher ↗</a>
+        <a href="https://www.reddit.com/r/recomps/" target="_blank" rel="noopener">r/recomps ↗</a>
+        <a href="https://www.reddit.com/r/decomps/" target="_blank" rel="noopener">r/decomps ↗</a></div>
+      <div class="ports-bar">
+        <div class="lb-boards" style="padding:0">${srcs.map(([k, l]) => `<button class="${state.portSrc === k ? 'on' : ''}" data-portsrc="${k}">${l}</button>`).join('')}</div>
+        <button class="toggle ${state.portMulti ? 'on' : ''}" data-portmulti>🤝 Co-op / multiplayer</button>
+        <input id="portQ" placeholder="Search, e.g. GTA, Zelda, Skate" value="${esc(state.portQ)}" autocomplete="off">
+      </div>
+      ${redditDown ? '<p class="hint">Reddit isn’t letting our server read it right now, so newer Reddit posts may be missing. The links above still work.</p>' : ''}
+      ${list.length ? `<div class="ports-list">${list.map(x => { const own = crewOwnsLike(x), recs = recsBy[x.key] || []; return `<article class="port ${state.flashPort === x.key ? 'flash' : ''}" id="port-${esc(x.key.replace(/[^a-z0-9]/gi, '_'))}">
+        ${x.img && !/\.ico(\?|$)/i.test(x.img) ? `<div class="port-art" style="background-image:url('${esc(x.img)}')"></div>` : `<div class="port-art none">${x.source === 'reddit' ? '💬' : '🧩'}</div>`}
+        <div class="port-body">
+          <div class="news-top"><span class="port-src ${x.source}">${srcLabel(x)}</span>${x.multi ? '<span class="tag coop">🤝 Co-op / multiplayer</span>' : ''}${own ? `<span class="tag owned" title="Someone in the crew owns ${esc(own.name)} on Steam">✓ Crew owns it on Steam</span>` : ''}<span class="news-when">${since(x.date)}</span></div>
+          <a class="news-title" href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>
+          ${x.game && x.game !== x.title ? `<div class="port-game">Based on <b>${esc(x.game)}</b>${x.version ? ` · ${esc(x.version)}` : ''}</div>` : x.version ? `<div class="port-game">${esc(x.version)}</div>` : ''}
+          ${x.summary ? `<p>${esc(x.summary.slice(0, 220))}${x.summary.length > 220 ? '…' : ''}</p>` : ''}
+          ${x.source === 'quiver' && (x.tags || []).length ? `<div class="tagrow">${x.tags.slice(0, 6).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
+          <div class="port-foot">
+            <button class="btn sm" data-recport="${esc(x.key)}">⭐ Recommend</button>
+            <a class="linkbtn" href="${esc(x.url)}" target="_blank" rel="noopener">${x.source === 'quiver' ? 'Open on Quiver ↗' : 'Read on Reddit ↗'}</a>
+            ${recs.length ? `<span class="port-recs">${recs.slice(0, 3).map(r => `${av(r.by, 'sm')} <b>${esc((crewById[r.by] || {}).name || '?')}</b>${r.note ? ` “${esc(r.note.slice(0, 60))}”` : ' recommends this'}`).join(' · ')}</span>` : ''}
+          </div>
+        </div></article>`; }).join('')}</div>`
+        : `<div class="empty">${P_.items.length ? 'Nothing matches those filters.' : 'Nothing in the feed yet. It refreshes every hour.'}</div>`}
+      <p class="hint">Quiver’s catalog lists ports you can install and keep updated. Reddit posts are progress reports and announcements, so a post isn’t proof a port is finished. You’ll still need your own copy of the original game.</p>`;
+  }
   function renderNews() {
+    if (state.newsTab === 'ports') return renderPorts();
     if (!state.news) { $('#view').innerHTML = '<div class="empty">Loading news…</div>'; loadNews(); return; }
     const mineSet = new Set(Object.keys(LIB[ME] || {}).map(Number));
     const list = state.news.filter(n => (!state.newsPatch || n.patch) && (LIVE || !state.newsMine || mineSet.has(n.appid)))
@@ -564,8 +622,8 @@
     const day = ts => { const d = (Date.now() - ts) / 864e5; return d < 1 ? 'Today' : d < 2 ? 'Yesterday' : d < 7 ? 'This week' : d < 31 ? 'This month' : 'Earlier'; };
     let last = '';
     $('#view').innerHTML = `
-      <div class="section-head" style="margin-top:0"><h2>News</h2><p>Updates and announcements for games the crew owns.</p></div>
-      <div class="filters" style="margin-bottom:18px">
+      <div class="section-head" style="margin-top:0"><h2>News</h2><p>Updates and announcements for games the crew owns.</p></div>${newsTabsHtml()}
+      <div class="filters" style="margin:14px 0 18px">
         <button class="toggle ${!state.newsMine ? 'on' : ''}" data-newsmine="0">Whole crew</button>
         <button class="toggle ${state.newsMine ? 'on' : ''}" data-newsmine="1">My games</button>
         <button class="toggle ${state.newsPatch ? 'on' : ''}" data-newspatch>🛠 Updates only</button>
@@ -629,7 +687,22 @@
   }
   function openPitch(id) { draft = { game: +id, to: [], note: '' }; renderModal(); $('#modal').hidden = false; setTimeout(() => $('#note') && $('#note').focus(), 30); }
   function closeModal() { $('#modal').hidden = true; $('#modal').innerHTML = ''; draft = null; }
+  function openRecommend(key) { draft = { port: key, to: [], note: '' }; renderModal(); $('#modal').hidden = false; setTimeout(() => $('#note') && $('#note').focus(), 30); }
   function renderModal() {
+    if (draft.port) {
+      const x = (state.ports.items || []).find(i => i.key === draft.port);
+      $('#modal').innerHTML = `<div class="sheet" role="dialog" aria-label="Recommend a port">${x.img && !/\.ico(\?|$)/i.test(x.img) ? `<div class="port-art big" style="background-image:url('${esc(x.img)}')"></div>` : ''}<div class="in">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h3>Recommend ${esc(x.title)}</h3><button class="linkbtn" data-close>Close ✕</button></div>
+        <div><div class="label" style="margin-bottom:8px">Who should see it?</div><div class="crew">
+          <button class="chip ${!draft.to.length ? 'on' : ''}" data-to="">Everyone</button>
+          ${CREW.filter(c => c.id !== ME).map(c => `<button class="chip ${draft.to.includes(c.id) ? 'on' : ''}" data-to="${c.id}">${av(c.id, 'sm')}${esc(c.name)}</button>`).join('')}
+        </div></div>
+        <div><div class="label" style="margin-bottom:8px">Note</div><textarea id="note" rows="2" placeholder="We need to try this…">${esc(draft.note)}</textarea></div>
+        <div><div class="label" style="margin-bottom:8px">Discord preview · #game-night</div><div id="dpreview">${discordPreview()}</div></div>
+        <div style="display:flex;gap:10px;justify-content:flex-end"><button class="btn ghost" data-close>Cancel</button><button class="btn blurple" id="sendRec">Send to #game-night</button></div>
+      </div></div>`;
+      return;
+    }
     const g = gameById[draft.game];
     $('#modal').innerHTML = `<div class="sheet" role="dialog" aria-label="Pitch a game">${art(g)}<div class="in">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h3>Pitch ${esc(g.name)}</h3><button class="linkbtn" data-close>Close ✕</button></div>
@@ -643,6 +716,14 @@
     </div></div>`;
   }
   function discordPreview() {
+    if (draft.port) {
+      const x = state.ports.items.find(i => i.key === draft.port);
+      const m = draft.to.map(t => `<span class="mention">@${esc(crewById[t].name)}</span>`).join(' ') || 'everyone';
+      return `<div class="discord"><div class="bot">Game Night<em>APP</em></div>
+        <div>🧩 <b>${esc(crewById[ME].name)}</b> recommends a port for ${m}</div>${draft.note ? `<div style="opacity:.85">› ${esc(draft.note)}</div>` : ''}
+        <div class="embed" style="border-color:#3E8E5A"><b>${esc(x.title)}</b><div style="opacity:.8">${esc((x.summary || '').slice(0, 140))}</div>
+        <div style="opacity:.7;font-size:12px;margin-top:4px">${x.source === 'quiver' ? 'Quiver Launcher' : esc((x.tags || [])[0] || 'Reddit')}${x.multi ? ' · 🤝 multiplayer / co-op' : ''}</div></div></div>`;
+    }
     const g = gameById[draft.game];
     const mentions = draft.to.map(t => `<span class="mention">@${esc(crewById[t].name)}</span>`).join(' ');
     return `<div class="discord"><div class="bot">Game Night<em>APP</em></div>
@@ -1187,6 +1268,10 @@
     }
     if (d.newsmine !== undefined) { state.newsMine = d.newsmine === '1'; state.news = LIVE ? null : state.news; render(); return; }
     if ('newspatch' in d) { state.newsPatch = !state.newsPatch; render(); return; }
+    if (d.newstab) { state.newsTab = d.newstab; render(); return; }
+    if (d.portsrc) { state.portSrc = d.portsrc; render(); return; }
+    if ('portmulti' in d) { state.portMulti = !state.portMulti; render(); return; }
+    if (d.recport) { openRecommend(d.recport); return; }
     if (d.lb) { state.lb = d.lb; render(); return; }
     if (d.lbv) { state.lbView = d.lbv; render(); return; }
     if (d.cur) { state.cur = d.cur; store.set('cur', d.cur); render(); if (draft) renderModal(); return; }
@@ -1198,6 +1283,20 @@
       else draft.to = draft.to.includes(d.to) ? draft.to.filter(x => x !== d.to) : [...draft.to, d.to];
       draft.note = ($('#note') || {}).value || draft.note;
       renderModal(); return;
+    }
+    if (t.id === 'sendRec' && draft && draft.port) {
+      const x = state.ports.items.find(i => i.key === draft.port), body = { key: draft.port, to: draft.to, note: draft.note.trim() };
+      if (LIVE) {
+        t.disabled = true; t.textContent = 'Sending…';
+        try {
+          const r = await API.call('/api/ports/recommend', { method: 'POST', body: JSON.stringify(body) });
+          closeModal(); toast(r.posted ? `Recommended <b>${esc(x.title)}</b> in <b>#game-night</b>` : `Recommended <b>${esc(x.title)}</b>`);
+          state.ports.recs.unshift({ id: r.id, key: body.key, by: ME, to: body.to, note: body.note, at: Date.now() }); render();
+        } catch (err) { toast(esc((err.body && err.body.message) || 'Could not send that.')); t.disabled = false; t.textContent = 'Send to #game-night'; }
+        return;
+      }
+      state.ports.recs.unshift({ id: 'r' + Date.now(), key: body.key, by: ME, to: body.to, note: body.note, at: Date.now() });
+      closeModal(); toast(`Recommended <b>${esc(x.title)}</b> in <b>#game-night</b> (mock)`); render(); return;
     }
     if (t.id === 'sendPitch' && draft) {
       const g = gameById[draft.game];
@@ -1272,6 +1371,7 @@
       const pos = e.target.selectionStart; render();
       const el = $('#libQ'); if (el) { el.focus(); el.setSelectionRange(pos, pos); }
     }
+    if (e.target.id === 'portQ') { state.portQ = e.target.value; const pos = e.target.selectionStart; render(); const el = $('#portQ'); if (el) { el.focus(); el.setSelectionRange(pos, pos); } return; }
     if (e.target.id === 'note' && draft) { draft.note = e.target.value; $('#dpreview').innerHTML = discordPreview(); }
   });
   document.addEventListener('keydown', e => {
@@ -1306,9 +1406,10 @@
     if (n.kind === 'pitch') return `${who} pitched ${game} to you`;
     if (n.kind === 'vote') return `${who} voted for your pitch of ${game}`;
     if (n.kind === 'playing') return `${who} says you’re playing ${game}`;
+    if (n.kind === 'port') return `${who} recommended a port: ${game}`;
     return `${who} · ${game}`;
   }
-  const NOTIF_IC = { pitch: '📣', vote: '▲', playing: '🎮' };
+  const NOTIF_IC = { pitch: '📣', vote: '▲', playing: '🎮', port: '🧩' };
   function renderBell() {
     const b = $('#bellBadge'); if (!b) return;
     b.hidden = !notif.unread; b.textContent = notif.unread > 9 ? '9+' : notif.unread;
@@ -1336,6 +1437,10 @@
       state.flashPitch = n.pitch; go('pitches');
       setTimeout(() => { const el = document.getElementById('pitch-' + n.pitch); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 250);
       setTimeout(() => { state.flashPitch = null; }, 3000);
+    } else if (n.kind === 'port') {
+      state.newsTab = 'ports'; state.portSrc = 'recs'; state.flashPort = n.ref; state.ports = null; go('news');
+      setTimeout(() => { const el = document.getElementById('port-' + String(n.ref || '').replace(/[^a-z0-9]/gi, '_')); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 900);
+      setTimeout(() => { state.flashPort = null; }, 4000);
     } else if (n.appid && gameById[n.appid]) openDetails(n.appid);
   }
   document.addEventListener('click', e => {
