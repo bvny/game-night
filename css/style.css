@@ -423,10 +423,11 @@ input,textarea,select{color:var(--ink)}
 .cat.flop.in{transform:translateY(6%)}
 .cat.flop.in .paws-up{animation:pawsWiggle 1.4s ease-in-out infinite alternate;transform-box:fill-box;transform-origin:50% 100%}
 .cat .tail{transform-box:fill-box;transform-origin:100% 100%;animation:wag 1.6s ease-in-out infinite alternate}
-.cat.walk{width:150px;bottom:-2px;left:0;animation:walkRight 17s linear forwards}
+.cat.walk{width:150px;bottom:-2px;left:0;animation:walkRight 26s linear forwards}
 .cat.walk.to-left{animation-name:walkLeft}
 .cat.walk.to-left .flip{transform:scaleX(-1)}
-.cat.walk.hurry{animation-duration:5s}
+.cat.walk.paused,.cat.walk.paused svg,.cat.walk.paused .leg,.cat.walk.paused .tail{animation-play-state:paused}
+.cat-bubble.fade{opacity:0;transition:opacity .6s}
 .cat.walk svg{animation:bob .28s ease-in-out infinite alternate}
 .cat.walk .leg{transform-box:fill-box;transform-origin:50% 0}
 .cat.walk .leg-a{animation:legSwing .56s ease-in-out infinite alternate}
@@ -484,3 +485,56 @@ input,textarea,select{color:var(--ink)}
 .lp-item.missing{border-color:var(--red);border-style:dashed}.lp-item.missing b{color:var(--red)}
 .lp-item.unknown b{color:var(--muted);font-weight:500}
 .lp-others{margin-top:8px;font-size:13px;color:var(--muted);display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
+
+/* ---------- phones: solid header, no ghosting, proper menu ---------- */
+@media (max-width:980px){
+  /* iOS Safari smears blurred sticky headers while scrolling: use a solid one */
+  .top{backdrop-filter:none;-webkit-backdrop-filter:none;background:var(--bg)}
+  .top-inner{height:60px!important;flex-wrap:nowrap!important;padding:0 14px!important;gap:10px}
+  .brand{min-width:0;flex:1 1 auto;overflow:hidden}
+  .brand>span:nth-child(2){white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .me{order:2;margin-left:auto!important}
+  .menu-btn{order:3;margin-left:0;flex:none}
+  .navwrap{order:4;position:fixed;top:60px;max-height:calc(100dvh - 60px);overflow-y:auto;overscroll-behavior:contain}
+  .top.menu-open .navwrap{animation:none}
+  html.menu-lock,html.menu-lock body{overflow:hidden}
+  .navwrap .tabs{overflow:visible!important}
+  .wrap{padding-left:14px;padding-right:14px}
+}
+@media (max-width:600px){
+  h1{font-size:34px}
+  .section-head h2,.lb-head h2{font-size:28px}
+  .shuffle .seg button,.side .seg button{font-size:12px;padding:8px 4px}
+  .lbrow{grid-template-columns:30px 40px 1fr auto;gap:10px;padding:10px 12px}
+  .lbrow .val{font-size:18px}
+  .tiles{grid-template-columns:1fr 1fr}
+  .stats.four{grid-template-columns:1fr 1fr}
+  .pf-head{flex-direction:column;align-items:flex-start}
+  .news-item{grid-template-columns:1fr}
+  .filters{gap:6px}.filters .toggle{padding:6px 11px;font-size:13px}
+  .roll-actions{flex-wrap:wrap}
+  .lastmatch{grid-template-columns:1fr}
+}
+
+/* ---------- leaderboard groups ---------- */
+.lb-groups{display:flex;flex-direction:column;gap:10px;margin-bottom:18px}
+.lb-group{display:grid;grid-template-columns:76px 1fr;align-items:center;gap:10px}
+.lb-group .label{color:var(--muted);font-size:10.5px}
+.lb-group .filters{margin:0}
+@media (max-width:600px){ .lb-group{grid-template-columns:1fr;gap:4px} }
+.fsep{width:2px;align-self:stretch;background:var(--line);margin:0 4px;border-radius:2px}
+
+/* ---------- profile: stats, cs2, privacy ---------- */
+.stats.four{grid-template-columns:repeat(4,1fr)}
+.stats small{display:block;font-size:11.5px;margin-top:2px}
+h4.sub{margin:18px 0 8px;font:11px 'Space Mono';text-transform:uppercase;letter-spacing:.12em;color:var(--muted)}
+.lastmatch{display:grid;grid-template-columns:170px 1fr;gap:14px;align-items:center}
+.lm-big{border:3px solid var(--edge);border-radius:var(--r);padding:12px;text-align:center;background:var(--paper)}
+.lm-big b{display:block;font-family:'Archivo Black';font-weight:400;font-size:36px;line-height:1}
+.lm-big b i{font-style:normal;color:var(--muted);margin:0 4px}
+.lm-big span{font-size:12px;color:var(--muted)}
+.privacy .check{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px dashed var(--line);cursor:pointer}
+.privacy .check input{width:20px;height:20px;margin-top:2px;accent-color:var(--red);flex:none}
+.privacy .check small{display:block;color:var(--muted);font-size:13px;margin-top:2px}
+select[data-statpick]{max-width:60%}
+.who-top .tagline{margin:3px 0 4px}

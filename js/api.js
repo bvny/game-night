@@ -51,6 +51,7 @@
     const CREW = crew.users.map((u, i) => ({
       id: u.id, name: u.name, avatar: u.avatar, color: PALETTE[i % PALETTE.length],
       private: !u.steam_id || u.steam_private, unlinked: !u.steam_id,
+      x: u.x || null, hide_money: !!u.hide_money, hide_stats: !!u.hide_stats,
     }));
     const LIB = {};
     Object.entries(crew.library).forEach(([uid, games]) => {

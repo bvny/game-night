@@ -22,6 +22,18 @@
     { id: 'niamh',   name: 'Niamh',   color: '#B5446E' },
     { id: 'sam',     name: 'Sam',     color: '#6B7A2A' },
   ];
+  // Fake Steam profile numbers for the leaderboards (live mode gets these from Steam daily)
+  const PX = (level, year, badges, friends, ach, perfect, cs2) => ({ level, created: Date.UTC(year, 4, 1), badges, friends, ach_pct: ach, perfect, cs2 });
+  const XS = {
+    james: PX(38, 2012, 41, 87, 34.2, 3, { kd: 1.12, hs: 47.3, win: 51.8, acc: 18.4, mvps: 1240, matches: 1610, kills: 19885 }),
+    bradley: PX(21, 2015, 18, 54, 41.7, 5, { kd: 0.94, hs: 39.1, win: 48.2, acc: 16.9, mvps: 610, matches: 880, kills: 11203 }),
+    conor: PX(12, 2019, 9, 33, 22.5, 0, null),
+    aoife: PX(55, 2010, 77, 140, 63.9, 14, { kd: 1.31, hs: 52.6, win: 55.0, acc: 21.2, mvps: 2010, matches: 2400, kills: 30551 }),
+    dee: PX(17, 2017, 12, 41, 28.0, 1, null),
+    niamh: PX(9, 2021, 5, 22, 51.3, 2, null),
+    sam: PX(30, 2013, 26, 61, 19.8, 0, { kd: 0.81, hs: 35.5, win: 46.0, acc: 15.1, mvps: 300, matches: 520, kills: 5400 }),
+  };
+  CREW.forEach(c => { if (XS[c.id]) c.x = XS[c.id]; });
 
   // id = Steam app id (used for header art + store links). Prices are made up.
   // max = group-tagged max players (Steam doesn't publish this).

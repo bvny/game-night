@@ -28,13 +28,14 @@
   const state = {
     view: 'tonight',
     on: new Set(savedOn.length ? savedOn : CORE),
-    tf: { single: false, coop: false, pvp: false, modded: false, small: false, fits: false, cheap: false },
-    sh: Object.assign({ pool: 'all', coop: false, pvp: false, free: false, fits: true, modded: false, single: false, small: false }, store.get('shuffle', {})),
+    tf: { single: false, coop: false, pvp: false, modded: false, small: false, fits: false, cap: 0 },
+    sh: Object.assign({ pool: 'all', coop: false, pvp: false, free: false, fits: true, modded: false, single: false, small: false, cap: 0 }, store.get('shuffle', {})),
     hidden: new Set(), history: [], current: null, rolling: false,
     pitches: LIVE ? [] : store.get('pitches', D.PITCHES || []),
+    statPick: {}, gstats: {}, gstatsLoading: {},
     query: '', lb: 'recent', lbView: 'rank', cmp: [ME, firstOther],
     cur: store.get('cur', 'EUR'),
-    disc: { src: 'played', unowned: true, single: false, modded: false, small: false, cheap: false },
+    disc: { src: 'played', unowned: true, single: false, modded: false, small: false, cap: 0 },
     news: null, newsMine: false, newsPatch: false, gameNews: {},
     profileId: null, profiles: {}, libQuery: '', libFilter: 'all', libShow: 60,
   };
@@ -98,7 +99,11 @@
   const P = g => (g.prices && g.prices[state.cur]) || { base: 0, steam: 0, key: null };
   const hasPrice = g => g.f2p || P(g).steam > 0;
   const price = g => g.f2p ? 'Free' : hasPrice(g) ? money(P(g).steam) : '—';
-  const cheap = g => g.f2p || (hasPrice(g) && P(g).steam < 20);
+  // Cheapest way to get it: Steam price or keyshop, whichever is lower
+  const cheapest = g => { if (g.f2p) return 0; const p = P(g), opts = [p.steam > 0 ? p.steam : null, p.key > 0 ? p.key : null].filter(v => v != null); return opts.length ? Math.min(...opts) : null; };
+  const underCap = (g, cap) => !cap || g.f2p || (cheapest(g) != null && cheapest(g) < cap);
+  const CAPS = [5, 10, 20];
+  const capBtns = (scope, cur) => CAPS.map(c => `<button class="toggle ${cur === c ? 'on' : ''}" data-cap="${scope}:${c}">Under ${SYM[state.cur]}${c}</button>`).join('');
   const fmt = n => (Math.round(n * 10) / 10).toLocaleString();
   const sizeTxt = mb => mb >= 1048576 ? (Math.round(mb / 104857.6) / 10) + ' TB' : mb >= 1024 ? (mb >= 10240 ? Math.round(mb / 1024) : Math.round(mb / 102.4) / 10) + ' GB' : mb + ' MB';
   const SMALL_MB = 20 * 1024;
@@ -209,9 +214,11 @@
 
   function setMenu(open) {
     $('.top').classList.toggle('menu-open', open);
+    document.documentElement.classList.toggle('menu-lock', open);
     $('#menuBtn').setAttribute('aria-expanded', String(open));
     $('#menuBtn').textContent = open ? '✕' : '☰';
   }
+  window.addEventListener('resize', () => { if (innerWidth > 980 && $('.top').classList.contains('menu-open')) setMenu(false); });
   function renderTheme() {
     const dark = document.documentElement.getAttribute('data-theme') === 'dark';
     $('#themeBtn').textContent = dark ? '☀️' : '🌙';
@@ -349,7 +356,7 @@
     const ppl = people(), v = $('#view');
     if (!ppl.length) { v.innerHTML = `<div class="empty">Tick who's on tonight to see what you can play.</div>`; return; }
     const f = state.tf;
-    const pass = (g, s) => (f.single ? knownSingle(g) : isMulti(g)) && (!f.coop || g.coop) && (!f.pvp || g.pvp) && (!f.modded || g.modded) && (!f.small || small(g)) && (!f.fits || s.fits) && (!f.cheap || cheap(g));
+    const pass = (g, s) => (f.single ? knownSingle(g) : isMulti(g)) && (!f.coop || g.coop) && (!f.pvp || g.pvp) && (!f.modded || g.modded) && (!f.small || small(g)) && (!f.fits || s.fits) && underCap(g, f.cap);
     const ready = [], almost = [], free = [];
     GAMES.forEach(g => {
       if (g.disc) return;
@@ -365,12 +372,12 @@
     free.sort((a, b) => b.s.owners.length - a.s.owners.length || b.s.groupH - a.s.groupH);
     const cap = list => list.slice(0, 48);
 
-    const fl = [['coop', 'Co-op'], ['pvp', 'PvP'], ['modded', '🔧 Modded'], ['small', '💾 Under 20 GB'], ['fits', ppl.length > 1 ? `Fits all ${ppl.length} of us` : 'Fits the group'], ['cheap', `Under ${SYM[state.cur]}20`], ['single', 'Single-player only']];
+    const fl = [['coop', 'Co-op'], ['pvp', 'PvP'], ['modded', '🔧 Modded'], ['small', '💾 Under 20 GB'], ['fits', ppl.length > 1 ? `Fits all ${ppl.length} of us` : 'Fits the group'], ['single', 'Single-player only']];
     const unsized = f.small ? GAMES.filter(g => !g.disc && !g.size && status(g, ppl).owners.length).length : 0;
     const sizeNote = f.small && unsized ? `<p class="hint" style="margin:0 0 12px">💾 Still checking install sizes for ${unsized} of these games. They show up here as Steam answers, a few dozen every few minutes.</p>` : '';
     const pending = sizeNote + (LIVE && D.pendingInfo ? `<p class="hint" style="margin:0 0 12px">⏳ Still fetching Steam info (co-op/PvP, prices) for ${D.pendingInfo} games. Refresh in a minute.</p>` : '');
     v.innerHTML = pending +
-      `<div class="filters">${fl.map(([k, l]) => `<button class="toggle ${f[k] ? 'on' : ''}" data-tf="${k}">${l}</button>`).join('')}</div>` +
+      `<div class="filters">${fl.map(([k, l]) => `<button class="toggle ${f[k] ? 'on' : ''}" data-tf="${k}">${l}</button>`).join('')}<span class="fsep"></span>${capBtns('tf', f.cap)}</div>` +
       (f.single ? section('Single-player', cap(ready), ready.length, 'Owned by someone ticked above. For solo nights.', 'ready') :
       section('Everyone owns', cap(ready), ready.length, 'Ready to launch right now.', 'ready') +
       section('Almost', cap(almost), almost.length, 'Only 1 or 2 people need to buy it.', 'almost') +
@@ -405,6 +412,8 @@
       if (o.pool === 'shortlist') { if (!pitchedSet().has(+g.id)) return false; }
       else if (o.pool === 'all' && (s.missing.length || !owned)) return false;
       if (o.pool === 'one' && (s.missing.length > 1 || !owned)) return false;
+      if (o.pool === 'none' && (owned || !g.name)) return false;
+      if (!underCap(g, o.cap)) return false;
       if (o.coop && !g.coop) return false;
       if (o.pvp && !g.pvp) return false;
       if (o.free && !g.f2p) return false;
@@ -414,7 +423,8 @@
   }
   function renderShuffle() {
     const p = pool(), o = state.sh, g = state.current && gameById[state.current];
-    const pools = [['all', 'Everyone owns'], ['one', 'Missing ≤1'], ['shortlist', 'Shortlist'], ['any', 'Anything']];
+    const pools = [['all', 'Everyone owns'], ['one', 'Missing ≤1'], ['none', 'Nobody owns'], ['shortlist', 'Shortlist'], ['any', 'Anything']];
+    if (LIVE && (o.pool === 'none' || o.pool === 'any') && !state.charts) loadCharts().then(() => { if (state.view === 'shuffle') render(); });
     const locks = [['fits', 'Fits everyone on'], ['coop', 'Co-op only'], ['pvp', 'PvP only'], ['free', 'Free only'], ['modded', '🔧 Modded only'], ['small', '💾 Under 20 GB'], ['single', 'Single-player only']];
     $('#view').innerHTML = `<div class="shuffle"><div>
       ${g ? bigCard(g) : `<div class="bigcard"><div class="art noimg"><span class="fallback" style="font-size:40px">🎲</span></div>
@@ -426,11 +436,15 @@
       <aside class="side">
         <div class="panel"><h3>Pool</h3>
           <div class="seg">${pools.map(([k, l]) => `<button class="${o.pool === k ? 'on' : ''}" data-pool="${k}">${l}</button>`).join('')}</div>${(() => { const blind = people().filter(id => crewById[id].private); return blind.length && o.pool !== 'any' ? `<p class="hint" style="margin:8px 0 0">🔒 Can’t see ${blind.map(id => esc(crewById[id].name)).join(', ')}’s Steam library, so ${blind.length > 1 ? 'they aren’t' : 'they’re not'} counted here.</p>` : ''; })()}
+          ${o.pool === 'none' ? '<p class="hint" style="margin:8px 0 0">Games none of tonight’s crew own: Steam’s charts, pitches and games other people have. Good for finding something new.</p>' : ''}
           <div class="poolcount">${p.length} game${p.length === 1 ? '' : 's'} in the pool${state.hidden.size ? ` · ${state.hidden.size} hidden · <button class="linkbtn" data-act="unhide">reset</button>` : ''}</div>
         </div>
         <div class="panel"><h3>Locks</h3><div class="locks">
           ${locks.map(([k, l]) => `<button class="lockrow ${o[k] ? 'on' : ''}" data-sh="${k}">${l}<span>${o[k] ? '🔒' : '🔓'}</span></button>`).join('')}
-        </div></div>
+        </div>
+        <span class="label" style="display:block;margin:14px 0 6px">Price cap</span>
+        <div class="seg">${[[0, 'Any'], ...CAPS.map(c => [c, SYM[state.cur] + c])].map(([c, l]) => `<button class="${(o.cap || 0) === c ? 'on' : ''}" data-cap="sh:${c}">${l}</button>`).join('')}</div>
+        <p class="hint" style="margin:6px 0 0">Uses the cheaper of the Steam price and keyshops. Free games always pass.</p></div>
         ${state.history.length ? `<div class="panel"><h3>Recent rolls</h3><div class="history">${state.history.map(h => `<div><span>${esc(gameById[h.id].name)}</span><span class="x">${h.verdict || ''}</span></div>`).join('')}</div></div>` : ''}
       </aside></div>`;
     if (g && !state.rolling) { hydrate(g, $('#bigcard')); loadGameNews(g, $('#bigcard')); }
@@ -507,16 +521,16 @@
       if (d.single ? !knownSingle(g) : !isMulti(g)) return false;
       if (d.modded && !g.modded) return false;
       if (d.small && !small(g)) return false;
-      if (d.cheap && !cheap(g)) return false;
+      if (!underCap(g, d.cap)) return false;
       return true;
     });
-    const fl = [['unowned', 'Nobody owns it yet'], ['modded', '🔧 Modded'], ['small', '💾 Under 20 GB'], ['cheap', `Under ${SYM[state.cur]}20`], ['single', 'Single-player only']];
+    const fl = [['unowned', 'Nobody owns it yet'], ['modded', '🔧 Modded'], ['small', '💾 Under 20 GB'], ['single', 'Single-player only']];
     const when = state.chartsUpdated ? ` · updated ${ago(state.chartsUpdated)}` : '';
     $('#view').innerHTML = `
       <div class="section-head" style="margin-top:0"><h2>Discovery</h2><span class="count">${list.length}</span><p>Steam's live charts${LIVE ? when : ''}. Click a game for the trailer.</p></div>
       <div class="disc-bar">
         <div class="seg" style="min-width:${SRC.length * 112}px">${SRC.map(([k, l]) => `<button class="${d.src === k ? 'on' : ''}" data-dsrc="${k}">${l}</button>`).join('')}</div>
-        <div class="filters">${fl.map(([k, l]) => `<button class="toggle ${d[k] ? 'on' : ''}" data-dtf="${k}">${l}</button>`).join('')}</div>
+        <div class="filters">${fl.map(([k, l]) => `<button class="toggle ${d[k] ? 'on' : ''}" data-dtf="${k}">${l}</button>`).join('')}<span class="fsep"></span>${capBtns('disc', d.cap)}</div>
       </div>
       ${list.length ? `<div class="grid" style="margin-top:20px">${list.map(discCard).join('')}</div>`
         : `<div class="empty" style="margin-top:20px">${all.length ? 'Nothing matches. Try turning a filter off.' : 'No chart data yet. Check back in a few minutes.'}</div>`}
@@ -652,6 +666,20 @@
       'wallet left the chat', '"I\'ll play it eventually"'],
     value: ['account worth more than their car', "Gabe's retirement fund", 'financially irresponsible, digitally rich', 'could have bought a house',
       'the wallet is crying', 'living proof sales work'],
+    onetrick: ['one game, one love', 'has heard of other games, allegedly', 'loyalty or Stockholm syndrome?', 'commitment issues: none', 'a one-trick pony'],
+    variety: ['can’t commit to anything', 'the sampler platter', 'attention span of a goldfish', 'tries everything once', 'serial game-hopper'],
+    backlog: ['the backlog is load-bearing', '“I’ll get to it”', 'collector, not a player', 'pile of shame champion', 'buys more than they play'],
+    freeloader: ['never paid for a game in their life', 'Gabe gets nothing', 'free-to-play, free to stay', 'cheapskate royalty', 'wallet untouched'],
+    level: ['badge-crafting addict', 'spent more on Steam level than games', 'the trading card economy thanks you', 'Steam’s favourite son'],
+    age: ['remembers Steam when it was bad', 'older than some of the crew', 'ancient one', 'was here before it was cool', 'Half-Life 2 veteran'],
+    ach: ['achievement hunter', 'completionist brain', '100% or nothing', 'reads the achievement list first', 'needs the little trophies'],
+    perfect: ['completionist brain', 'touch grass (after 100%)', 'got every single one', 'the platinum goblin'],
+    badges: ['badge hoarder', 'collects everything', 'trading card capitalist'],
+    friends: ['knows everyone', 'Steam social butterfly', 'adds randoms after every match', 'popular, allegedly'],
+    cs2kd: ['actually decent at CS', 'top fragger', 'baits teammates, probably', 'aim diff', 'the one carrying'],
+    cs2hs: ['one tap merchant', 'aims for the head (only)', 'heads only', 'crosshair placement king'],
+    cs2win: ['wins more than they lose', 'carries the team', 'winners queue'],
+    cs2mvps: ['MVP hoarder', 'main character energy', 'the star of every round'],
     shame: ['money well spent (not)', 'bought it, never launched it', 'Steam sale’s favourite victim', 'the backlog is load-bearing',
       '“it was only €3 though”', 'donating to Valve, basically'],
   };
@@ -664,45 +692,72 @@
     return list[h % list.length];
   }
   const fullPrice = g => !g || g.f2p ? 0 : (P(g).base || P(g).steam || 0);
+  const gname = id => (gameById[id] || {}).name || 'something';
+  const LB_GROUPS = [
+    ['Playtime', [['recent', 'Last 2 weeks'], ['all', 'All time'], ['onetrick', 'One-trick'], ['variety', 'Variety']]],
+    ['Library', [['owned', 'Games owned'], ['backlog', 'Backlog %'], ['freeloader', 'Free-game hours']]],
+    ['Money', [['value', '💰 Account value'], ['shame', '🔥 Unplayed spend']]],
+    ['Steam', [['level', 'Steam level'], ['age', 'Oldest account'], ['ach', 'Achievement %'], ['perfect', 'Perfect games'], ['badges', 'Badges'], ['friends', 'Friends']]],
+    ['CS2', [['cs2kd', 'K/D'], ['cs2hs', 'Headshot %'], ['cs2win', 'Win rate'], ['cs2mvps', 'MVPs']]],
+  ];
+  // Every board: who's on it, their number, and an optional "mostly X" line
+  function lbMetric(mode, c) {
+    const lib = LIB[c.id] || {}, ids = Object.keys(lib), x = c.x || {}, cs = x.cs2 || {};
+    const sum = f => ids.reduce((a, id) => a + f(id), 0);
+    const topBy = f => { let top = null, topV = 0; ids.forEach(id => { const v = f(id); if (v > topV) { topV = v; top = id; } }); return { top, topV }; };
+    const allH = sum(id => lib[id].h);
+    switch (mode) {
+      case 'recent': return { val: sum(id => lib[id].h2w), ...topBy(id => lib[id].h2w), fav: t => `Mostly ${gname(t.top)} · ${fmt(t.topV)}h` };
+      case 'all': return { val: allH, ...topBy(id => lib[id].h), fav: t => `Mostly ${gname(t.top)} · ${fmt(t.topV)}h` };
+      case 'onetrick': { const t = topBy(id => lib[id].h); return allH > 10 ? { val: Math.round(t.topV / allH * 1000) / 10, ...t, fav: t => `${gname(t.top)} · ${fmt(t.topV)}h` } : null; }
+      case 'variety': { const played = ids.filter(id => lib[id].h2w > 0); return { val: played.length, fav: () => played.slice(0, 4).map(gname).join(', ') }; }
+      case 'owned': return { val: ids.length };
+      case 'backlog': { const paid = ids.filter(id => gameById[id] && !gameById[id].f2p); const nev = paid.filter(id => !lib[id].h); return paid.length >= 5 ? { val: Math.round(nev.length / paid.length * 1000) / 10, fav: () => `${nev.length} of ${paid.length} paid games never launched` } : null; }
+      case 'freeloader': return { val: sum(id => gameById[id] && gameById[id].f2p ? lib[id].h : 0), ...topBy(id => gameById[id] && gameById[id].f2p ? lib[id].h : 0), fav: t => `Mostly ${gname(t.top)} · ${fmt(t.topV)}h` };
+      case 'value': if (c.hide_money) return null; return { val: sum(id => fullPrice(gameById[id])), ...topBy(id => fullPrice(gameById[id])), fav: t => `Priciest: ${gname(t.top)} · ${money(t.topV)}` };
+      case 'shame': { if (c.hide_money) return null; const f = id => lib[id].h ? 0 : fullPrice(gameById[id]); const n = ids.filter(id => f(id) > 0).length; return { val: sum(f), ...topBy(f), fav: t => `${n} unplayed games · worst: ${gname(t.top)} (${money(t.topV)})` }; }
+      case 'level': return x.level != null ? { val: x.level } : null;
+      case 'age': return x.created ? { val: Math.round((Date.now() - x.created) / (365.25 * 864e5) * 10) / 10, fav: () => 'since ' + new Date(x.created).toLocaleDateString('en-IE', { month: 'short', year: 'numeric' }) } : null;
+      case 'ach': return x.ach_pct != null ? { val: x.ach_pct, fav: () => 'across their most played games' } : null;
+      case 'perfect': return x.perfect != null ? { val: x.perfect } : null;
+      case 'badges': return x.badges != null ? { val: x.badges } : null;
+      case 'friends': return x.friends != null ? { val: x.friends } : null;
+      case 'cs2kd': return cs.kd != null ? { val: cs.kd, fav: () => `${fmt(cs.kills)} kills · ${fmt(cs.matches)} matches` } : null;
+      case 'cs2hs': return cs.hs != null ? { val: cs.hs } : null;
+      case 'cs2win': return cs.win != null ? { val: cs.win, fav: () => `${fmt(cs.matches)} matches` } : null;
+      case 'cs2mvps': return cs.mvps != null ? { val: cs.mvps } : null;
+    }
+    return null;
+  }
+  const LB_UNIT = { recent: 'hrs · 2 weeks', all: 'hrs · all time', onetrick: 'of hours in one game', variety: 'games · 2 weeks', owned: 'games', backlog: 'never launched', freeloader: 'hrs in free games',
+    value: 'full Steam price', shame: 'never launched', level: 'Steam level', age: 'years on Steam', ach: 'achievements', perfect: '100% games', badges: 'badges', friends: 'friends',
+    cs2kd: 'kills per death', cs2hs: 'headshots', cs2win: 'matches won', cs2mvps: 'MVPs' };
+  const PCT = new Set(['onetrick', 'backlog', 'ach', 'cs2hs', 'cs2win']);
   function rankingsHtml() {
     const pub = CREW.filter(c => !c.private), mode = state.lb;
-    const money_ = mode === 'value' || mode === 'shame';
-    const rows = pub.map(c => {
-      const lib = LIB[c.id] || {}, ids = Object.keys(lib);
-      const per = id => mode === 'recent' ? lib[id].h2w : mode === 'all' ? lib[id].h
-        : mode === 'value' ? fullPrice(gameById[id]) : mode === 'shame' ? (lib[id].h ? 0 : fullPrice(gameById[id])) : 1;
-      let top = null, topV = 0;
-      ids.forEach(id => { const v = per(id); if (v > topV) { topV = v; top = id; } });
-      const val = ids.reduce((a, id) => a + per(id), 0);
-      const extra = mode === 'shame' ? ids.filter(id => !lib[id].h && fullPrice(gameById[id]) > 0).length : 0;
-      return { c, val: Math.round(val * 100) / 100, top, topV, extra };
-    }).sort((a, b) => b.val - a.val);
+    const isMoney = mode === 'value' || mode === 'shame';
+    const rows = pub.map(c => { const m = lbMetric(mode, c); return m ? { c, ...m, val: Math.round(m.val * 100) / 100 } : null; }).filter(Boolean).sort((a, b) => b.val - a.val);
+    const left = pub.filter(c => !rows.find(r => r.c.id === c.id));
     const max = rows[0] ? rows[0].val || 1 : 1;
-    const unit = { recent: 'hrs · 2 weeks', all: 'hrs · all time', owned: 'games', value: 'full Steam price', shame: 'never launched' }[mode];
-    const favLine = r => {
-      if (!r.top || !r.topV) return '';
-      const n = esc(gname(r.top));
-      if (mode === 'value') return `Priciest: ${n} · ${money(r.topV)}`;
-      if (mode === 'shame') return `${r.extra} unplayed games · worst: ${n} (${money(r.topV)})`;
-      if (mode === 'owned') return '';
-      return `Mostly ${n} · ${fmt(r.topV)}h`;
-    };
+    const show = v => isMoney ? money(v) : PCT.has(mode) ? v + '%' : mode === 'cs2kd' ? v.toFixed(2) : fmt(v);
+    const favOf = r => { try { return r.fav && (r.top === undefined || r.topV) ? esc(r.fav(r)) : ''; } catch { return ''; } };
     const together = GAMES.filter(g => !g.disc).map(g => {
       const pl = pub.filter(c => owns(c.id, g.id));
       return { g, n: pl.length, h: pl.reduce((a, c) => a + LIB[c.id][g.id].h, 0) };
     }).filter(x => x.n >= 2 && x.h > 0).sort((a, b) => b.h - a.h).slice(0, 8);
-    const modes = [['recent', 'Last 2 weeks'], ['all', 'All time'], ['owned', 'Games owned'], ['value', '💰 Account value'], ['shame', '🔥 Unplayed spend']];
     const priv = CREW.filter(c => c.private).map(c => c.name).join(', ');
-    const gname = id => (gameById[id] || {}).name || 'something';
+    const steamy = ['level', 'age', 'ach', 'perfect', 'badges', 'friends'].includes(mode) || mode.startsWith('cs2');
+    const leftNote = left.length ? `${esc(left.map(c => c.name).join(', '))} not on this board (${isMoney ? 'chose to hide their spending' : steamy ? (mode.startsWith('cs2') ? 'no CS2 stats, or' : 'not loaded yet, or') + ' stats hidden' : 'not enough data'}). ` : '';
     return `<div class="lb-layout"><div>
-        <div class="filters" style="margin-bottom:16px">${modes.map(([k, l]) => `<button class="toggle ${mode === k ? 'on' : ''}" data-lb="${k}">${l}</button>`).join('')}</div>
-        ${rows.map((r, i) => `<div class="lbrow ${i === 0 ? 'gold' : ''}">
+        <div class="lb-groups">${LB_GROUPS.map(([g, ms]) => `<div class="lb-group"><span class="label">${g}</span><div class="filters">${ms.map(([k, l]) => `<button class="toggle ${mode === k ? 'on' : ''}" data-lb="${k}">${l}</button>`).join('')}</div></div>`).join('')}</div>
+        ${rows.length ? rows.map((r, i) => `<div class="lbrow ${i === 0 ? 'gold' : ''}">
           <div class="rank-b r${i < 3 ? i + 1 : 0}">${i + 1}</div>${av(r.c.id, 'lg')}
-          <div class="who"><div class="who-top"><button class="linkbtn name" data-view="profile" data-profile="${r.c.id}">${esc(r.c.name)}</button>${i === 0 && r.val > 0 ? `<span class="tagline">${esc(tagline(r.c, mode))}</span>` : ''}</div>${favLine(r) ? `<div class="fav">${favLine(r)}</div>` : ''}
-            <div class="bar"><i style="width:${(r.val / max) * 100}%"></i></div></div>
-          <div class="val">${money_ ? money(r.val) : fmt(r.val)}<small>${unit}</small></div></div>`).join('')}
-        ${money_ ? `<p class="hint">${mode === 'value' ? 'What every game in each library would cost at today’s full Steam price.' : 'Full Steam price of games bought and never launched. Steam doesn’t share real purchase history, so this is the closest honest number.'} Games still loading prices count as zero.</p>` : ''}
-        <p class="hint">${priv ? esc(priv) + ' not shown (Steam private or not linked). ' : ''}Nightly snapshots will add weekly and monthly boards.</p>
+          <div class="who"><div class="who-top"><button class="linkbtn name" data-view="profile" data-profile="${r.c.id}">${esc(r.c.name)}</button>${i === 0 && r.val > 0 && TAGLINES[mode] ? `<span class="tagline">${esc(tagline(r.c, mode))}</span>` : ''}</div>${favOf(r) ? `<div class="fav">${favOf(r)}</div>` : ''}
+            <div class="bar"><i style="width:${Math.max(0, r.val / max) * 100}%"></i></div></div>
+          <div class="val">${show(r.val)}<small>${LB_UNIT[mode]}</small></div></div>`).join('') : `<div class="empty">Nobody on this board yet. ${steamy ? 'Steam profile numbers load once a day per person.' : ''}</div>`}
+        ${isMoney ? `<p class="hint">${mode === 'value' ? 'What every game in each library would cost at today’s full Steam price.' : 'Full Steam price of games bought and never launched. Steam doesn’t share real purchase history, so this is the closest honest number.'} Games still loading prices count as zero.</p>` : ''}
+        ${mode === 'onetrick' ? '<p class="hint">Share of all their hours spent in their single most played game.</p>' : ''}
+        <p class="hint">${leftNote}${priv ? esc(priv) + ' not shown (Steam private or not linked). ' : ''}Anyone can hide their stats or spending from their profile.</p>
       </div>
       <div class="panel"><h3>Most played together</h3><ul class="together">
         ${together.map(t => `<li><span>${esc(t.g.name)}</span><span>${fmt(t.h)}h · ${t.n} players</span></li>`).join('') || '<li><span>Not enough data yet</span></li>'}
@@ -724,7 +779,15 @@
       ['Games owned', Object.keys(la).length, Object.keys(lb).length],
       ['Account value', Object.keys(la).reduce((s, id) => s + fullPrice(gameById[id]), 0), Object.keys(lb).reduce((s, id) => s + fullPrice(gameById[id]), 0), true],
       ['Unplayed spend', Object.keys(la).reduce((s, id) => s + (la[id].h ? 0 : fullPrice(gameById[id])), 0), Object.keys(lb).reduce((s, id) => s + (lb[id].h ? 0 : fullPrice(gameById[id])), 0), true],
-    ];
+    ].filter(r => !r[3] || (!crewById[a].hide_money && !crewById[b].hide_money));
+    const xa = crewById[a].x || {}, xb = crewById[b].x || {};
+    const extraRow = (l, f, d = 1) => { const p = f(xa), q = f(xb); if (p != null && q != null) stats.push([l, Math.round(p * d) / d, Math.round(q * d) / d]); };
+    extraRow('Steam level', x => x.level);
+    extraRow('Years on Steam', x => x.created ? (Date.now() - x.created) / (365.25 * 864e5) : null, 10);
+    extraRow('Achievement %', x => x.ach_pct, 10);
+    extraRow('CS2 K/D', x => x.cs2 && x.cs2.kd, 100);
+    extraRow('CS2 headshot %', x => x.cs2 && x.cs2.hs, 10);
+    extraRow('CS2 win rate %', x => x.cs2 && x.cs2.win, 10);
     const both = Object.keys(la).filter(id => lb[id] && gameById[id]).map(id => ({ g: gameById[id], a: la[id].h, b: lb[id].h })).sort((x, y) => (y.a + y.b) - (x.a + x.b));
     const only = (l1, l2) => Object.keys(l1).filter(id => !l2[id] && gameById[id]).map(id => ({ g: gameById[id], h: l1[id].h })).sort((x, y) => y.h - x.h).slice(0, 6);
     const onlyA = only(la, lb), onlyB = only(lb, la);
@@ -775,7 +838,13 @@
         level: 12 + id.length * 5,
         achievements: top.map((x, i) => ({ appid: x.appid, achieved: 10 + i * 7, total: 40 + i * 9 })),
         stats: top[0] ? [{ appid: top[0].appid, stats: [{ name: 'total_kills', value: 18342 }, { name: 'total_wins', value: 912 }, { name: 'total_time_played', value: top[0].minutes * 60 }, { name: 'total_mvps', value: 640 }] }] : [],
+        profile: c.x ? { ...c.x, xp: c.x.level * 410, recent: library.filter(g => g.minutes_2w).slice(0, 4).map(g => ({ appid: g.appid, name: g.name, h2w: Math.round(g.minutes_2w / 6) / 10 })) } : null,
+        cs2: lib[730] && c.x && c.x.cs2 ? { ...c.x.cs2, deaths: Math.round(c.x.cs2.kills / c.x.cs2.kd), rounds: c.x.cs2.matches * 22, hours: lib[730].h, bombs_planted: 410, bombs_defused: 120, knife: 37,
+          last: { kills: 21, deaths: 14, mvps: 4, damage: 2650, rounds: 24, wins: 13, score: 58 } } : null,
+        stat_games: library.filter(g => g.minutes > 60).slice(0, 12).map(g => ({ appid: g.appid, name: g.name })),
       },
+      settings: id === ME ? store.get('settings', {}) : undefined,
+      stats_hidden: id === ME ? !!store.get('settings', {}).hide_stats : false,
     };
   }
   async function loadProfile(id) {
@@ -860,15 +929,99 @@
         : '<p class="hint">This builds up from nightly snapshots. Check back in a few days.</p>'}
       </div>
 
-      ${(x.stats || []).some(st => (st.stats || []).some(k => /[a-z]{3,}/i.test(k.name))) || (x.achievements || []).length ? `<div class="pf-grid" style="margin-top:18px">
-        ${(x.stats || []).filter(st => (st.stats || []).some(k => /[a-z]{3,}/i.test(k.name))).map(st => `<div class="panel"><h3>${esc(gname(st.appid))} <span class="hint" style="font:400 13px Outfit">· in-game stats</span></h3>
-          <div class="stats">${st.stats.filter(k => /[a-z]{3,}/i.test(k.name)).map(k => `<div><span class="label">${esc(prettyStat(k.name))}</span><b>${statVal(k.name, k.value)}</b></div>`).join('')}</div></div>`).join('')}
-        ${(x.achievements || []).length ? `<div class="panel"><h3>Achievements</h3>${x.achievements.map(a => `<div class="pbar"><span class="n">${esc(gname(a.appid))}</span>
+      ${P.stats_hidden && !self ? `<div class="empty" style="margin-top:18px">🔒 ${esc(c.name)} keeps their in-game stats private.</div>` : `
+      <div class="pf-grid" style="margin-top:18px">
+        ${steamProfileHtml(x)}
+        ${(x.achievements || []).length ? `<div class="panel"><h3>Achievements <span class="hint" style="font:400 13px Outfit">· most played games</span></h3>${x.achievements.map(a => `<div class="pbar"><span class="n">${esc(gname(a.appid))}</span>
           <div class="track gold"><i style="width:${a.achieved / a.total * 100}%"></i></div><span class="v">${a.achieved}/${a.total}</span></div>`).join('')}</div>` : ''}
-      </div>` : ''}
+      </div>
+      ${cs2Html(x.cs2)}
+      ${statsExplorerHtml(id, P)}`}
+      ${self ? privacyHtml(P) : ''}
 
       ${libraryPanel(P)}`}
     </div>`;
+  }
+  const yearsAgo = ts => { const y = (Date.now() - ts) / (365.25 * 864e5); return y >= 1 ? `${Math.floor(y)} year${y >= 2 ? 's' : ''}` : `${Math.max(1, Math.floor(y * 12))} months`; };
+  function steamProfileHtml(x) {
+    const pr = x.profile;
+    if (!pr) return `<div class="panel"><h3>Steam profile</h3><p class="hint">Steam level, badges and friends load once a day. Check back soon.</p></div>`;
+    const rows = [
+      ['Steam level', pr.level != null ? `Lv ${pr.level}` : '—', pr.xp ? fmt(pr.xp) + ' XP' : ''],
+      ['Account age', pr.created ? yearsAgo(pr.created) : '—', pr.created ? 'since ' + new Date(pr.created).toLocaleDateString('en-IE', { month: 'short', year: 'numeric' }) : ''],
+      ['Badges', pr.badges != null ? fmt(pr.badges) : '—', ''],
+      ['Steam friends', pr.friends != null ? fmt(pr.friends) : 'hidden', pr.friends == null ? 'friends list is private' : ''],
+      ['Achievements', pr.ach_pct != null ? pr.ach_pct + '%' : '—', 'across most played games'],
+      ['Perfect games', pr.perfect != null ? fmt(pr.perfect) : '—', '100% achievements'],
+    ];
+    return `<div class="panel"><h3>Steam profile</h3>
+      <div class="stats">${rows.map(([l, v, sub]) => `<div><span class="label">${l}</span><b>${v}</b>${sub ? `<small class="hint">${esc(sub)}</small>` : ''}</div>`).join('')}</div>
+      ${(pr.recent || []).length ? `<h4 class="sub">Recently played</h4><ul class="together">${pr.recent.map(g => `<li><button class="linkbtn" data-details="${g.appid}">${esc(g.name || 'App ' + g.appid)}</button><span>${fmt(g.h2w)}h · 2 weeks</span></li>`).join('')}</ul>` : ''}
+    </div>`;
+  }
+  function cs2Html(c) {
+    if (!c || !(c.kills || c.matches)) return '';
+    const L = c.last;
+    const life = [['K/D', c.kd ?? '—'], ['Headshot %', c.hs != null ? c.hs + '%' : '—'], ['Win rate', c.win != null ? c.win + '%' : '—'], ['Accuracy', c.acc != null ? c.acc + '%' : '—'],
+      ['Matches', fmt(c.matches)], ['MVPs', fmt(c.mvps)], ['Kills', fmt(c.kills)], ['Bombs planted', fmt(c.bombs_planted)]];
+    return `<div class="panel cs2" style="margin-top:18px"><h3>Counter-Strike 2 <span class="hint" style="font:400 13px Outfit">· lifetime</span></h3>
+      <div class="stats four">${life.map(([l, v]) => `<div><span class="label">${l}</span><b>${v}</b></div>`).join('')}</div>
+      ${L ? `<h4 class="sub">Last match</h4><div class="lastmatch">
+        <div class="lm-big"><b>${L.kills}<i>/</i>${L.deaths}</b><span>kills / deaths</span></div>
+        <div class="stats">${[['Rounds won', `${L.wins} of ${L.rounds}`], ['MVPs', L.mvps], ['Damage', fmt(L.damage)], ['Score', fmt(L.score)]].map(([l, v]) => `<div><span class="label">${l}</span><b>${v}</b></div>`).join('')}</div>
+      </div>` : ''}
+      <p class="hint" style="margin-bottom:0">Steam only shares lifetime totals and the last match. For full match history, try <a href="https://leetify.com" target="_blank" rel="noopener">Leetify</a> or <a href="https://csstats.gg" target="_blank" rel="noopener">csstats.gg</a>.</p>
+    </div>`;
+  }
+  function statsExplorerHtml(id, P) {
+    const list = (P.extras && P.extras.stat_games) || [];
+    if (!list.length) return '';
+    const cur = state.statPick[id] || ((P.extras.stats || [])[0] || {}).appid || list[0].appid;
+    const key = id + ':' + cur, d = state.gstats[key];
+    if (!d) loadGameStats(id, cur);
+    const body = !d ? '<p class="hint">Loading stats…</p>' : d.hidden ? '<p class="hint">Hidden.</p>' : `
+      ${d.achievements ? `<div class="pbar" style="margin-bottom:12px"><span class="n">Achievements</span><div class="track gold"><i style="width:${d.achievements.achieved / d.achievements.total * 100}%"></i></div><span class="v">${d.achievements.achieved}/${d.achievements.total}</span></div>` : ''}
+      ${d.stats.length ? `<div class="stats four">${d.stats.map(k => `<div><span class="label">${esc(prettyStat(k.name))}</span><b>${statVal(k.name, k.value)}</b></div>`).join('')}</div>`
+        : `<p class="hint">This game doesn’t share in-game stats with Steam${d.achievements ? ', only achievements' : ''}.</p>`}
+      ${d.achievements && d.achievements.recent.length ? `<h4 class="sub">Latest unlocks</h4><ul class="together">${d.achievements.recent.map(a => `<li><span>🏆 ${esc(a.name)}</span><span>${since(a.at)}</span></li>`).join('')}</ul>` : ''}`;
+    return `<div class="panel" style="margin-top:18px"><div class="lb-head" style="margin:0 0 12px"><h3 style="margin:0">Game stats</h3>
+      <select data-statpick="${id}">${list.map(g => `<option value="${g.appid}" ${+g.appid === +cur ? 'selected' : ''}>${esc(g.name || 'App ' + g.appid)}</option>`).join('')}</select></div>${body}</div>`;
+  }
+  async function loadGameStats(id, appid) {
+    const key = id + ':' + appid;
+    if (state.gstats[key] || state.gstatsLoading[key]) return;
+    state.gstatsLoading[key] = true;
+    await Promise.resolve(); // never re-render in the middle of the render that asked for this
+    try {
+      state.gstats[key] = LIVE ? await API.call(`/api/profile/${id}/stats?appid=${appid}`) : mockGameStats(id, appid);
+    } catch { state.gstats[key] = { stats: [], achievements: null }; }
+    delete state.gstatsLoading[key];
+    if (state.view === 'profile' && (state.profileId || ME) === id) render();
+  }
+  function mockGameStats(id, appid) {
+    const h = ((LIB[id] || {})[appid] || {}).h || 10, seed = (+appid % 97) + 3;
+    return {
+      stats: [['total_kills', h * 31], ['total_wins', Math.round(h * 1.7)], ['total_time_played', h * 3600], ['total_deaths', h * 27], ['matches_played', Math.round(h * 2.2)], ['total_damage', h * 2100]].map(([name, value]) => ({ name, value })),
+      achievements: { achieved: seed % 40 + 5, total: 50, recent: [{ name: 'Not bad', at: Date.now() - 3 * 864e5 }, { name: 'Getting there', at: Date.now() - 20 * 864e5 }] },
+    };
+  }
+  function privacyHtml(P) {
+    const st = P.settings || {};
+    return `<div class="panel privacy" style="margin-top:18px"><h3>Privacy</h3>
+      <label class="check"><input type="checkbox" data-setting="hide_stats" ${st.hide_stats ? 'checked' : ''}> <span><b>Hide my stats</b><small>In-game stats, achievements, CS2 numbers and Steam profile details. You’re also left off the Steam and CS2 leaderboards.</small></span></label>
+      <label class="check"><input type="checkbox" data-setting="hide_money" ${st.hide_money ? 'checked' : ''}> <span><b>Hide my spending</b><small>Leaves you off the Account value and Unplayed spend boards.</small></span></label>
+      <p class="hint" style="margin-bottom:0">Your playtime and games still show so the game finder keeps working. To hide single games, use the eye on your library below.</p></div>`;
+  }
+  async function saveSetting(key, val) {
+    const P = state.profiles[ME];
+    if (!LIVE) { const st = store.get('settings', {}); st[key] = val; store.set('settings', st); if (P) P.settings = st; Object.assign(crewById[ME], { [key]: val }); toast('Saved'); render(); return; }
+    try {
+      const r = await API.call('/api/me/settings', { method: 'POST', body: JSON.stringify({ [key]: val }) });
+      if (P) P.settings = r.settings;
+      crewById[ME][key] = val; if (key === 'hide_stats' && val) delete crewById[ME].x;
+      toast(val ? 'Hidden from everyone else' : 'Visible again');
+      render();
+    } catch { toast('Couldn’t save that. Try again.'); }
   }
   function steamPanel(P) {
     const u = P.user;
@@ -944,6 +1097,7 @@
     if (nav && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setMenu(false); go(nav.dataset.view, { profile: nav.dataset.profile }); return; }
     if (e.target.closest('#menuBtn')) { setMenu(!$('.top').classList.contains('menu-open')); return; }
     if ($('.top').classList.contains('menu-open') && !e.target.closest('.top')) setMenu(false);
+    if ($('.top').classList.contains('menu-open') && !e.target.closest('.top')) setMenu(false);
     if (e.target.closest('#themeBtn')) { toggleTheme(); return; }
     const det = e.target.closest('[data-details]');
     if (det && !e.target.closest('[data-pitch]')) { openDetails(+det.dataset.details); return; }
@@ -958,6 +1112,10 @@
     if (d.crew) {
       state.on = new Set(d.crew === 'all' ? CREW.map(c => c.id) : d.crew === 'core' ? CORE : d.crew === 'online' ? [ME, ...CREW.filter(c => isOnline(c.id)).map(c => c.id)] : []);
       store.set(LIVE ? 'on-live' : 'on', [...state.on]); renderCrew(); render(); return;
+    }
+    if (d.cap) {
+      const [scope, v] = d.cap.split(':'), obj = scope === 'sh' ? state.sh : scope === 'disc' ? state.disc : state.tf;
+      obj.cap = obj.cap === +v ? 0 : +v; if (scope === 'sh') store.set('shuffle', state.sh); render(); return;
     }
     if (d.tf) { state.tf[d.tf] = !state.tf[d.tf]; render(); return; }
     if (d.pool) { state.sh.pool = d.pool; store.set('shuffle', state.sh); render(); return; }
@@ -1057,6 +1215,8 @@
 
   document.addEventListener('change', e => {
     if (e.target.dataset.cmp !== undefined) { state.cmp[+e.target.dataset.cmp] = e.target.value; render(); }
+    if (e.target.dataset.statpick) { state.statPick[e.target.dataset.statpick] = +e.target.value; render(); }
+    if (e.target.dataset.setting) saveSetting(e.target.dataset.setting, e.target.checked);
   });
   document.addEventListener('input', e => {
     if (e.target.id === 'q') {

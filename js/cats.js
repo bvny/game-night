@@ -162,8 +162,8 @@
       lines: ['mrrp!', 'belly rub? (it’s a trap)', 'FEED ME', 'I vote Stardew', 'pspspsps yourself', '*knocks controller off desk*', 'play with ME instead', 'is it dinner yet'] },
     { id: 'void', name: names[2] || '', special: 'peek',
       lines: ['lukas shut up about csgo', 'still downloading? lol', 'your internet is slower than me getting off the bed', '40 GB? see you next week',
-        '*sits on keyboard* gg', 'skill issue', 'what are you looking at nigga', 'dont touch me fag', 'imagine not owning the game, nigga',
-        'im gonna grab some food', 'get faster internet faggot', 'I could carry you in csgo and I have no thumbs'] },
+        '*sits on keyboard* gg', 'skill issue', 'I am not a cat. I am a void with opinions', 'you queued for THAT?', 'imagine not owning the game',
+        '*stares into your soul*', 'ping: 999', 'I could carry you in csgo and I have no thumbs'] },
   ];
   const pick = a => a[Math.floor(Math.random() * a.length)];
 
@@ -192,7 +192,12 @@
       el.className = `cat walk ${leftSide ? 'to-right' : 'to-left'}`;
       el.innerHTML = `<div class="flip">${walkSVG(cat.id)}</div>`;
       el.addEventListener('animationend', e => { if (e.target === el) remove(el); });
-      el.addEventListener('click', () => { say(el, cat); el.classList.add('hurry'); });
+      // Stop and talk (so you can read it), then carry on walking
+      el.addEventListener('click', () => {
+        if (el.dataset.said) return;
+        say(el, cat); el.classList.add('paused');
+        setTimeout(() => { el.classList.remove('paused'); const b = el.querySelector('.cat-bubble'); if (b) setTimeout(() => b.classList.add('fade'), 2500); }, 4500);
+      });
       root.appendChild(el);
       return;
     }
